@@ -1,0 +1,5 @@
+<resources>
+    <string name="foreground_notification_cancel">SWIPE TO CANCEL</string>
+    <string name="foreground_notification_title">WEHEAD APP NOT IN FOREGROUND</string>
+    <string name="foreground_notification_subtitle">Return to foreground in 10 seconds</string>
+</resources>
