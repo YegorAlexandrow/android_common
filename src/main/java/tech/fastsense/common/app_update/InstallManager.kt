@@ -1,4 +1,4 @@
-package tech.fastsense.head.app_update
+package tech.fastsense.common.app_update
 
 import android.annotation.SuppressLint
 import android.app.DownloadManager
