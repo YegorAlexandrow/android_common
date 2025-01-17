@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace 'tech.fastsence.common'
+    namespace 'tech.fastsense.common'
     compileSdk 34
     ndkVersion = "25.1.8937393"
 
@@ -62,6 +62,15 @@ dependencies {
     api 'com.google.firebase:firebase-functions-ktx'
 
     api 'com.google.code.gson:gson:2.9.1'
+
+    api("io.ktor:ktor-server-core:$ktor_version")
+    api("io.ktor:ktor-server-jetty:$ktor_version")
+    api("io.ktor:ktor-server-cio:$ktor_version")
+    api("io.ktor:ktor-server-websockets:$ktor_version")
+    api("io.ktor:ktor-server-cors:$ktor_version")
+    api("io.ktor:ktor-client-core:$ktor_version")
+    api("io.ktor:ktor-client-cio:$ktor_version")
+    api("io.ktor:ktor-client-websockets:$ktor_version")
 
     api 'com.google.oboe:oboe:1.8.1'
 

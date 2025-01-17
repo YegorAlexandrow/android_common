@@ -1,4 +1,4 @@
-package tech.fastsense.head
+package tech.fastsense.common
 
 import android.annotation.SuppressLint
 import android.content.Context

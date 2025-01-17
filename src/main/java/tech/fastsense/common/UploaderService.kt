@@ -27,6 +27,7 @@ import kotlin.concurrent.thread
 
 class UploaderService : Service() {
     companion object {
+        // TODO unhardcode package name (not required now)
         const val EXTERNAL_TRANSFER_ROOT =
             "/storage/emulated/0/Android/media/tech.fastsense.head/TransferToCloud"
         const val CREATE_DIR = 1073742080

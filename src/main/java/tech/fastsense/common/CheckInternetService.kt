@@ -1,4 +1,4 @@
-package tech.fastsense.common;
+package tech.fastsense.common
 
 import android.app.Service
 import android.content.Intent
