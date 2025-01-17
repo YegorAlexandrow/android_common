@@ -37,7 +37,7 @@ private:
                     MI::getTestResultDestination,
                     ReturnType<jobject>{},
                     "getTestResultDestination",
-                    "()Ltech/fastsense/head/native_audio/NativeSpeakerTest$TestResult;"
+                    "()Ltech/fastsense/common/native_audio/NativeSpeakerTest$TestResult;"
             },
             MethodDescription{
                     MI::onTestResultReady,
