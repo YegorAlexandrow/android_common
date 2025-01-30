@@ -17,11 +17,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
-import org.koin.java.KoinJavaComponent
 import tech.fastsense.common.api.ApiClient
 import tech.fastsense.common.autostart.AutostartPreconditions
 import tech.fastsense.common.local_logger.LocalLogger
-import tech.fastsense.common.native_audio.SpeakerTest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.TimeZone
@@ -114,7 +112,7 @@ class StatusLogger(private val context: Context) : KoinComponent {
                     "buildProduct" to Build.PRODUCT,
                     "mechVersion" to (if (Build.MODEL == "SM-G973F") "0.2.0" else null),
                     "settings" to mSettings.all,
-                    "audioInfo" to (KoinJavaComponent.get<SpeakerTest>(SpeakerTest::class.java)).getDeviceInfo(),
+//            TODO        "audioInfo" to (KoinJavaComponent.get<SpeakerTest>(SpeakerTest::class.java)).getDeviceInfo(),
                     "avatarAutostart" to getAvatarAutostartInfoMap()
                 )
             )
