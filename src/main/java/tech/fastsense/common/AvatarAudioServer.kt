@@ -10,9 +10,9 @@ import android.media.MediaRecorder
 import android.util.Log
 import androidx.preference.PreferenceManager
 import io.ktor.server.application.install
+import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.jetty.Jetty
-import io.ktor.server.jetty.JettyApplicationEngine
+import io.ktor.server.jetty.jakarta.Jetty
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.server.websocket.WebSockets
@@ -44,7 +44,7 @@ import kotlin.math.pow
 class AvatarAudioServer(private val context: Context) : KoinComponent {
 
     private var audioServerThread: Thread? = null
-    private var server: JettyApplicationEngine? = null
+    private var server: EmbeddedServer<*, *>? = null
     private var audioTrack: AudioTrack? = null
     private var audioRecord: AudioRecord? = null
     private var recThread: Thread? = null
@@ -375,7 +375,7 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
     }
 
     companion object {
-        const val TAG = "AvatarAudioServer"
+        private const val TAG = "AvatarAudioServer"
         fun log(s: String) = Log.e(TAG, s)
 
         val endian: ByteOrder = ByteOrder.LITTLE_ENDIAN
