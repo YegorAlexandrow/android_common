@@ -140,9 +140,14 @@ class ApiClient(private val context: Context) {
         }
     }
 
-    fun getReleases(releaseType: ReleaseType?, callback: (List<Release>) -> Unit) {
+    fun getReleases(
+        releaseType: ReleaseType?,
+        isFrameApp: Boolean = false,
+        callback: (List<Release>) -> Unit
+    ) {
+        val projectParam = if (isFrameApp) "project=frame&" else ""
         httpClient.getJson(
-            "/releases/?release_type=${releaseType?.toString() ?: ""}"
+            "/releases/?${projectParam}release_type=${releaseType?.toString() ?: ""}"
         ) {
             run {
                 val gson = Gson()
