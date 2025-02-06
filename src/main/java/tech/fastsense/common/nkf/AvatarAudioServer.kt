@@ -1,4 +1,6 @@
-package tech.fastsense.common
+@file:OptIn(DelicateCoroutinesApi::class)
+
+package tech.fastsense.common.nkf
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -8,15 +10,18 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.util.Log
-import androidx.preference.PreferenceManager
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.server.application.install
-import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.jetty.jakarta.Jetty
+import io.ktor.server.jetty.Jetty
+import io.ktor.server.jetty.JettyApplicationEngine
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.DefaultWebSocketSession
+import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readBytes
 import io.ktor.websocket.send
@@ -32,7 +37,6 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import tech.fastsense.common.native_audio.JniWrapper
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
@@ -40,11 +44,11 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.pow
+import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 
 class AvatarAudioServer(private val context: Context) : KoinComponent {
 
-    private var audioServerThread: Thread? = null
-    private var server: EmbeddedServer<*, *>? = null
+    private var server: JettyApplicationEngine? = null
     private var audioTrack: AudioTrack? = null
     private var audioRecord: AudioRecord? = null
     private var recThread: Thread? = null
@@ -54,12 +58,13 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
     private val jni: JniWrapper by inject()
 
     private var audioStreamConnected = false
+    private var continuousGcc = false
 
     private val sampleRate = 24000
     private val recSampleRate = 16000
 
     private val gccMargin = 4096
-    private val gccSamples = gccMargin * 16
+    private val gccSamples = gccMargin * 2
     private val compensationLimit = 80
 
     private val batchSize = 16
@@ -225,13 +230,19 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
             renderCoroChannel.send(resampledChunk)
         }
     }
+    private suspend fun DefaultWebSocketSession.sendMic(serverSession: DefaultWebSocketServerSession) {
+        for (frame in incoming) {
+            log("new mic frame")
+            serverSession.send(frame)
+        }
+    }
 
-    //todo obj decomp
-    @OptIn(DelicateCoroutinesApi::class)
-    private suspend fun DefaultWebSocketServerSession.outputChunks() {
+    private suspend fun DefaultWebSocketSession.sendNkf() {
         val bufferX = ByteBuffer.allocateDirect(gccSamples * 2).order(endian)
         val bufferY = ByteBuffer.allocateDirect(gccSamples * 2).order(endian)
 
+        var firstDriftFound = false
+        var silenceSkipped = false
         var driftTimeoutRunning = false
 
         var batchChunkIndex = 0
@@ -249,6 +260,14 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
                 recordBatch[batchChunkIndex * samplesInBatchChunk + i] = it
             }
             if (++batchChunkIndex != batchSize) return
+
+//            data class Meta(val spk_size: Int, val mic_size: Int, val ts: Long)
+
+
+            val f = Frame.Text(
+                "{\"spk_size\": $batchSamples,\"mic_size\": $batchSamples,\"ts\": ${System.currentTimeMillis()} }"
+            )
+            send(f)
             send(renderBytes(renderBatch))
             send(recordBytes(recordBatch))
             batchChunkIndex = 0
@@ -267,13 +286,18 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
                     driftTimeoutRunning = false
                 }
             }
-            if (drifting || isSilence(renderChunk)) return
+            if (drifting) return
+            if (!silenceSkipped) {
+                if (isSilence(renderChunk)) return
+                silenceSkipped = true
+            }
             for (i in renderChunk.indices) {
                 if (bufferX.position() >= bufferX.capacity()) break
                 bufferX.putShort(renderChunk[i])
                 bufferY.putShort(recChunk[i])
             }
             if (bufferX.position() < bufferX.capacity()) return
+            firstDriftFound = true
             log("GCC-PHAT RUN")
             bufferX.position(0)
             bufferY.position(0)
@@ -286,53 +310,86 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
         suspend fun loop() {
             val renderChunk = renderCoroChannel.receiveCatching().getOrNull()
             val recChunk = recCoroChannel.receiveCatching().getOrNull()
-            if (renderChunk == null || recChunk == null) return
-            batchLoop(renderChunk, recChunk)
-            gccLoop(renderChunk, recChunk)
+            val noRender = renderChunk == null
+            val noRec = recChunk == null
+            if (noRender || noRec) {
+                log("noRender: $noRender || noRec: $noRec")
+                return
+            }
+            batchLoop(renderChunk!!, recChunk!!)
+            if (!firstDriftFound || continuousGcc) gccLoop(renderChunk, recChunk)
         }
 
         while (!renderCoroChannel.isClosedForReceive && !recCoroChannel.isClosedForReceive) loop()
+
+    }
+
+    //todo obj decomp
+    private suspend fun DefaultWebSocketServerSession.handleClient() {
+
+        val client = HttpClient {
+            install(ClientWebSockets)
+        }
+        client.webSocket(
+            host = "34.34.10.219",
+            port = 8000,
+            path = "/ws",
+        ) {
+            try {
+                listOf(
+                    async(Dispatchers.IO) { sendMic(this@handleClient) },
+                    async(Dispatchers.IO) { sendNkf() }
+                ).joinAll()
+            } catch (e: Exception) {
+                log("exception: $e")
+            } finally {
+                this.close()
+            }
+        }
+
+
     }
 
     fun start() {
-        val settings = PreferenceManager.getDefaultSharedPreferences(context)
-        if (!settings.getBoolean("use_speaker", false) || audioServerThread != null) return
-
+        log("START")
+//  todo decouple wehead prefs
+//        val settings = PreferenceManager.getDefaultSharedPreferences(context)
+//        if (!settings.getBoolean("use_speaker", false) || audioServerThread != null) return
+        if (server != null) return
+        log("INIT")
         initAudioTrack()
         initAudioRecord()
         jni.gccPhatInit(gccSamples)
-
-        audioServerThread = thread {
-            server = embeddedServer(Jetty, port = 8080) {
-                install(WebSockets)
-                routing {
-                    webSocket("/") {
-                        log("audio ws connected")
-                        try {
-                            if (audioStreamConnected) throw RuntimeException("audio stream socket already connected")
-                            audioStreamConnected = true
-                            listOf(
-                                async(Dispatchers.IO) { inputChunks() },
-                                async(Dispatchers.IO) { outputChunks() }
-                            ).joinAll()
-                        } catch (_: CancellationException) {
-                            log("canceled")
-                        } catch (e: Exception) {
-                            log("audio ws got exception: $e")
-                        } finally {
-                            log("audio ws closed")
-                            this.close()
-                            audioStreamConnected = false
-                            audioTrack!!.stop()
-                            audioTrack!!.release()
-                            audioRecord!!.stop()
-                            audioRecord!!.release()
-                        }
+        server = embeddedServer(Jetty, port = 8080) {
+            install(WebSockets)
+            routing {
+                webSocket("/") {
+                    log("audio ws connected")
+                    try {
+                        if (audioStreamConnected) throw RuntimeException("audio stream socket already connected")
+                        audioStreamConnected = true
+                        listOf(
+                            async(Dispatchers.IO) { inputChunks() },
+                            async(Dispatchers.IO) { handleClient() },
+                        ).joinAll()
+                    } catch (_: CancellationException) {
+                        log("canceled")
+                    } catch (e: Exception) {
+                        log("audio ws got exception: $e")
+                    } finally {
+                        log("audio ws closed")
+                        this.close()
+                        audioStreamConnected = false
+                        audioTrack!!.stop()
+                        audioTrack!!.release()
+                        audioRecord!!.stop()
+                        audioRecord!!.release()
                     }
                 }
-            }.start()
-        }
+            }
+        }.start(wait = false)
     }
+
 
     private fun isSilence(renderChunk: ShortArray): Boolean {
         for (i in renderChunk.indices step samplesInBatchChunk / 50) {
@@ -342,55 +399,20 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
     }
 
     fun stop() {
-        if (audioServerThread == null) return
+        if (server == null) return
         log("stop")
         server!!.stop(150, 250)
-        audioServerThread!!.interrupt()
-        audioServerThread!!.join()
         server = null
         audioTrack = null
         audioRecord = null
         recThread = null
-        audioServerThread = null
         audioRecordStarted = false
         log("audio server finished")
     }
 
-    class Ftb(size: Int) {
-        private val buf: ByteBuffer = ByteBuffer.allocate(size * 4).order(endian)
-        operator fun invoke(fa: FloatArray): ByteArray = with(buf) {
-            position(0)
-            for (float in fa) putFloat(float)
-            array()
-        }
-    }
-
-    class Stb(size: Int) {
-        private val buf: ByteBuffer = ByteBuffer.allocate(size * 2).order(endian)
-        operator fun invoke(sa: ShortArray): ByteArray = with(buf) {
-            position(0)
-            for (short in sa) putShort(short)
-            array()
-        }
-    }
-
     companion object {
-        private const val TAG = "AvatarAudioServer"
-        fun log(s: String) = Log.e(TAG, s)
-
-        val endian: ByteOrder = ByteOrder.LITTLE_ENDIAN
-
-        fun Int.samplesToMs(sampleRate: Int): Double {
-            return this / (sampleRate / 1000.0)
-        }
-
-        val ByteArray.floatArray: FloatArray
-            get() {
-                val floatBuffer =
-                    ByteBuffer.wrap(this).order(endian).asFloatBuffer()
-                val floatArray = FloatArray(floatBuffer.remaining())
-                floatBuffer.get(floatArray)
-                return floatArray
-            }
+        private val TAG = "NkfAudioServer"
+        private fun log(m: String) = Log.v(TAG, m)
+        private fun loge(m: String) = Log.e(TAG, m)
     }
 }
