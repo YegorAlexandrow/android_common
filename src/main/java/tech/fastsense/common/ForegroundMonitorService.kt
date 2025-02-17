@@ -11,12 +11,14 @@ import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.preference.PreferenceManager
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import java.util.Timer
 import java.util.TimerTask
 
 
-class ForegroundMonitorService: Service() {
-    private lateinit var statusLogger: StatusLogger
+class ForegroundMonitorService: Service(), KoinComponent {
+    private val statusLogger: StatusLogger by inject()
     private lateinit var monitorTimer: Timer
 
     private lateinit var notificationManager: NotificationManager
@@ -82,7 +84,6 @@ class ForegroundMonitorService: Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         prepareNotification()
 
-        this.statusLogger = StatusLogger(applicationContext)
         this.monitorTimer = Timer()
         this.monitorTimer.schedule(monitorTimerTask, 0, 1000)
 

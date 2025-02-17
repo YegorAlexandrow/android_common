@@ -24,7 +24,7 @@ class InstallManager(private val context: Context) : KoinComponent {
         context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private var downloadStatusTimer: Timer = Timer()
     private var downloadStatusListener: ((String, Int, Int, Int) -> Unit)? = null
-    private var statusLogger: StatusLogger = StatusLogger(context)
+    private val statusLogger: StatusLogger by inject()
     private var onCompleteDownloadReceiver: BroadcastReceiver? = null
 
     companion object {
