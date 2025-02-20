@@ -66,9 +66,7 @@ class TestAudioClient(context: Context) {
             log("new mic frame")
             try {
                 val mic = frame.readBytes()
-                withContext(Dispatchers.IO) {
-                    micFos.write(mic)
-                }
+                withContext(Dispatchers.IO) { micFos.write(mic) }
             } catch (e: Exception) {
                 log("incoming error: " + e.stackTraceToString())
                 break
@@ -83,13 +81,13 @@ class TestAudioClient(context: Context) {
         thread = thread {
             loge("thread")
             client = HttpClient { install(WebSockets) }
-            val micDos = FileOutputStream(filePath + "mic_" + System.currentTimeMillis())
+            val micFos = FileOutputStream(filePath + "mic_" + System.currentTimeMillis())
             try {
                 runBlocking {
                     client?.webSocket(host = "localhost", port = 8080, path = "/") {
                         try {
                             listOf(
-                                async(Dispatchers.IO) { input(micDos) },
+                                async(Dispatchers.IO) { input(micFos) },
                                 async(Dispatchers.IO) { output() },
                             ).joinAll()
                         } catch (e: Exception) {
@@ -108,8 +106,8 @@ class TestAudioClient(context: Context) {
                 } catch (e: InterruptedException) {
                     return@thread
                 } finally {
-                    micDos.flush()
-                    micDos.close()
+                    micFos.flush()
+                    micFos.close()
                 }
             }
             loge("~thread")
@@ -128,7 +126,7 @@ class TestAudioClient(context: Context) {
     }
 
     companion object {
-        private val TAG = "TestAudioClient"
+        private const val TAG = "TestAudioClient"
         private fun log(m: String) = Log.v(TAG, m)
         private fun loge(m: String) = Log.e(TAG, m)
     }

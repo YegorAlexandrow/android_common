@@ -9,6 +9,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Environment
 import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocket
@@ -33,9 +34,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import tech.fastsense.common.native_audio.JniWrapper
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -56,6 +59,15 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
     private val renderCoroChannel = Channel<ShortArray>(capacity = 256)
 
     private val jni: JniWrapper by inject()
+
+    private val filePath =
+        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.absolutePath + "/nkf_test_"
+
+    private var writeDbgFiles = true
+    private var spk24fFos: FileOutputStream? = null
+    private var spkFos: FileOutputStream? = null
+    private var micFos: FileOutputStream? = null
+    private var resFos: FileOutputStream? = null
 
     private var audioStreamConnected = false
     private var continuousGcc = false
@@ -120,17 +132,55 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
 
         for (i in output16kHz.indices) {
             val indexInInput = (i * resamplingFactor).toInt()
-
-            if (indexInInput < input24kHz.size) {
-                val sampleWithGain = input24kHz[indexInInput] * gainFactor
+            val filtered = lowPassFilter(input24kHz, inputSampleRate, outputSampleRate / 2)
+            if (indexInInput < filtered.size) {
+                val sampleWithGain = filtered[indexInInput] * gainFactor
                 output16kHz[i] =
                     (sampleWithGain.coerceIn(-1.0, 1.0) * Short.MAX_VALUE).toInt().toShort()
             } else {
                 output16kHz[i] = 0
             }
         }
-
         return output16kHz
+    }
+
+    private fun lowPassFilter(
+        input: FloatArray,
+        sampleRate: Int,
+        cutoffFrequency: Int
+    ): FloatArray {
+        val rc = 1.0 / (2.0 * Math.PI * cutoffFrequency)
+        val dt = 1.0 / sampleRate
+        val alpha = dt / (rc + dt)
+
+        val output = FloatArray(input.size)
+        output[0] = input[0]
+
+        for (i in 1 until input.size) {
+            output[i] = (output[i - 1] + alpha * (input[i] - output[i - 1])).toFloat()
+        }
+
+        return output
+    }
+
+    private fun lowPassFilter(
+        input: ShortArray,
+        sampleRate: Int,
+        cutoffFrequency: Int
+    ): ShortArray {
+        val rc = 1.0 / (2.0 * Math.PI * cutoffFrequency)
+        val dt = 1.0 / sampleRate
+        val alpha = dt / (rc + dt)
+
+        val output = ShortArray(input.size)
+        output[0] = input[0]
+
+        for (i in 1 until input.size) {
+            val filtered = output[i - 1] + alpha * (input[i] - output[i - 1])
+            output[i] = filtered.toInt().toShort()
+        }
+
+        return output
     }
 
     private fun initAudioTrack() {
@@ -202,7 +252,8 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
         val outputSampleRate = recSampleRate
         for (frame in incoming) {
             startAudioRecord()
-            val chunk = frame.readBytes().floatArray
+            val chunkRaw = frame.readBytes()
+            val chunk = chunkRaw.floatArray
 
             if (!isChunkSizeValid(chunk.size, inputSampleRate, outputSampleRate)) {
                 log("Invalid chunk size for resampling")
@@ -221,7 +272,7 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
                 exactDrift += samplesInBatchChunk
                 continue
             }
-
+            if (writeDbgFiles) withContext(Dispatchers.IO) { spk24fFos?.write(chunkRaw) }
             val resampledChunk = convertAndResample(
                 chunk,
                 inputSampleRate,
@@ -233,13 +284,24 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
     private suspend fun DefaultWebSocketSession.sendMic(serverSession: DefaultWebSocketServerSession) {
         for (frame in incoming) {
             log("new mic frame")
-            serverSession.send(frame)
+            try {
+                serverSession.send(frame)
+                if (writeDbgFiles) withContext(Dispatchers.IO) { resFos?.write(frame.readBytes()) }
+            } catch (_: CancellationException) {
+                log("canceled")
+            } catch (e: Exception) {
+                log("incoming error: " + e.stackTraceToString())
+            }
         }
     }
 
     private suspend fun DefaultWebSocketSession.sendNkf() {
         val bufferX = ByteBuffer.allocateDirect(gccSamples * 2).order(endian)
         val bufferY = ByteBuffer.allocateDirect(gccSamples * 2).order(endian)
+
+        val cutoffFrequency = 4000
+        val recordFilter = ButterworthLowPassFilter(recSampleRate, cutoffFrequency)
+        val renderFilter = ButterworthLowPassFilter(recSampleRate, cutoffFrequency)
 
         var firstDriftFound = false
         var silenceSkipped = false
@@ -253,23 +315,31 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
         val recordBytes = Stb(batchSamples)
 
         suspend fun batchLoop(renderChunk: ShortArray, recordChunk: ShortArray) {
-            renderChunk.forEachIndexed { i, it ->
+            val filteredRender = renderFilter.process(renderChunk)
+            val filteredRecord = recordFilter.process(recordChunk)
+
+            filteredRender.forEachIndexed { i, it ->
                 renderBatch[batchChunkIndex * samplesInBatchChunk + i] = it
             }
-            recordChunk.forEachIndexed { i, it ->
+            filteredRecord.forEachIndexed { i, it ->
                 recordBatch[batchChunkIndex * samplesInBatchChunk + i] = it
             }
             if (++batchChunkIndex != batchSize) return
 
 //            data class Meta(val spk_size: Int, val mic_size: Int, val ts: Long)
-
-
             val f = Frame.Text(
                 "{\"spk_size\": $batchSamples,\"mic_size\": $batchSamples,\"ts\": ${System.currentTimeMillis()} }"
             )
             send(f)
-            send(renderBytes(renderBatch))
-            send(recordBytes(recordBatch))
+            val render = renderBytes(renderBatch)
+            val record = recordBytes(recordBatch)
+            send(render)
+            send(record)
+            if (writeDbgFiles) withContext(Dispatchers.IO) {
+                spkFos?.write(render)
+                micFos?.write(record)
+            }
+
             batchChunkIndex = 0
         }
 
@@ -357,6 +427,7 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
 //        if (!settings.getBoolean("use_speaker", false) || audioServerThread != null) return
         if (server != null) return
         log("INIT")
+
         initAudioTrack()
         initAudioRecord()
         jni.gccPhatInit(gccSamples)
@@ -364,8 +435,15 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
             install(WebSockets)
             routing {
                 webSocket("/") {
-                    log("audio ws connected")
+                    val time = System.currentTimeMillis()
+                    log("audio ws connected at: $time")
                     try {
+                        if (writeDbgFiles) {
+                            spk24fFos = FileOutputStream(filePath + "spk24f_" + time)
+                            spkFos = FileOutputStream(filePath + "spk_" + time)
+                            micFos = FileOutputStream(filePath + "mic_" + time)
+                            resFos = FileOutputStream(filePath + "res_" + time)
+                        }
                         if (audioStreamConnected) throw RuntimeException("audio stream socket already connected")
                         audioStreamConnected = true
                         listOf(
@@ -384,6 +462,15 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
                         audioTrack!!.release()
                         audioRecord!!.stop()
                         audioRecord!!.release()
+
+                        spk24fFos?.flush()
+                        spkFos?.flush()
+                        micFos?.flush()
+                        resFos?.flush()
+                        spk24fFos?.close()
+                        spkFos?.close()
+                        micFos?.close()
+                        resFos?.close()
                     }
                 }
             }
@@ -411,7 +498,7 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
     }
 
     companion object {
-        private val TAG = "NkfAudioServer"
+        private const val TAG = "NkfAudioServer"
         private fun log(m: String) = Log.v(TAG, m)
         private fun loge(m: String) = Log.e(TAG, m)
     }
