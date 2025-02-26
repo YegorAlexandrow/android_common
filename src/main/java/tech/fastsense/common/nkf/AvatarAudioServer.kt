@@ -431,7 +431,7 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
         initAudioTrack()
         initAudioRecord()
         jni.gccPhatInit(gccSamples)
-        server = embeddedServer(Jetty, port = 8080) {
+        server = embeddedServer(Jetty, port = 8082) {
             install(WebSockets)
             routing {
                 webSocket("/") {

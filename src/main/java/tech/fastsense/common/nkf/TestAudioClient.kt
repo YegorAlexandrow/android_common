@@ -84,7 +84,7 @@ class TestAudioClient(context: Context) {
             val micFos = FileOutputStream(filePath + "mic_" + System.currentTimeMillis())
             try {
                 runBlocking {
-                    client?.webSocket(host = "localhost", port = 8080, path = "/") {
+                    client?.webSocket(host = "localhost", port = 8082, path = "/") {
                         try {
                             listOf(
                                 async(Dispatchers.IO) { input(micFos) },
