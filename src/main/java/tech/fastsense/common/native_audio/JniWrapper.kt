@@ -26,4 +26,6 @@ class JniWrapper {
     external fun gccPhatInit(size: Int)
     external fun gccPhatExecute(x: ByteBuffer, y: ByteBuffer, margin: Int): Int
 
+    external fun webrtcAec3RunFile(spkFilePath: String, micFilePath: String, outputFilePath: String): Boolean
+
 }
