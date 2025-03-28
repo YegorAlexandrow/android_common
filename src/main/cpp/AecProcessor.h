@@ -2,7 +2,6 @@
 
 #include <vector>
 #include <memory>
-#include <algorithm>
 #include "modules/audio_processing/aec3/echo_canceller3.h"
 #include "modules/audio_processing/include/audio_processing.h"
 #include "modules/audio_processing/audio_buffer.h"
@@ -22,42 +21,36 @@ public:
         echo_control_ = aec_factory.Create(sample_rate_, 1, 1);
         hp_filter_ = std::make_unique<webrtc::HighPassFilter>(sample_rate_, 1);
 
-        // Initialize audio buffers with proper configuration
         render_audio_ = std::make_unique<webrtc::AudioBuffer>(
-                config_.sample_rate_hz(), config_.num_channels(),
-                config_.sample_rate_hz(), config_.num_channels(),
-                config_.sample_rate_hz(), config_.num_channels());
+                config_.sample_rate_hz(), 1,
+                config_.sample_rate_hz(), 1,
+                config_.sample_rate_hz(), 1);
 
         capture_audio_ = std::make_unique<webrtc::AudioBuffer>(
-                config_.sample_rate_hz(), config_.num_channels(),
-                config_.sample_rate_hz(), config_.num_channels(),
-                config_.sample_rate_hz(), config_.num_channels());
+                config_.sample_rate_hz(), 1,
+                config_.sample_rate_hz(), 1,
+                config_.sample_rate_hz(), 1);
     }
 
+    size_t GetSamplesPerFrame() const {
+        return samples_per_frame_;
+    }
 
-    void ProcessAudioFrames(const std::vector<int16_t> &render_data,
-                            const std::vector<int16_t> &capture_data,
-                            std::vector<int16_t> &output_data,
-                            int stream_delay_ms = 0) {
-        const size_t total_frames = capture_data.size() / samples_per_frame_;
-        output_data.resize(capture_data.size());
+    void ProcessFrame(const int16_t *render_frame,
+                      const int16_t *capture_frame,
+                      int16_t *output_frame) {
+        render_audio_->CopyFrom(render_frame, config_);
+        capture_audio_->CopyFrom(capture_frame, config_);
 
-        for (size_t frame_idx = 0; frame_idx < total_frames; ++frame_idx) {
-            const size_t offset = frame_idx * samples_per_frame_;
-            myLog("frame_idx: %i", frame_idx);
-            render_audio_->CopyFrom(&render_data[offset], config_);
-            capture_audio_->CopyFrom(&capture_data[offset], config_);
-            hp_filter_->Process(capture_audio_.get(), true);
-            echo_control_->SetAudioBufferDelay(stream_delay_ms);
-            echo_control_->AnalyzeCapture(capture_audio_.get());
-            echo_control_->AnalyzeRender(render_audio_.get());
-            echo_control_->ProcessCapture(capture_audio_.get(), false);
-            capture_audio_->CopyTo(config_, &output_data[offset]);
-        }
+        hp_filter_->Process(capture_audio_.get(), true);
+        echo_control_->AnalyzeCapture(capture_audio_.get());
+        echo_control_->AnalyzeRender(render_audio_.get());
+        echo_control_->ProcessCapture(capture_audio_.get(), false);
+
+        capture_audio_->CopyTo(config_, output_frame);
     }
 
 private:
-
     const int sample_rate_;
     const size_t samples_per_frame_;
     const webrtc::StreamConfig config_;

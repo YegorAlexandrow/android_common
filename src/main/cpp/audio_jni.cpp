@@ -169,39 +169,42 @@ void SavePCM16File(const std::string &filepath, const std::vector<int16_t> &data
     }
 }
 
-// In your JNI function:
-extern "C" JNIEXPORT jboolean JNICALL
-Java_tech_fastsense_common_native_1audio_JniWrapper_webrtcAec3RunFile(JNIEnv *env,
-                                                                      jobject /* this */,
-                                                                      jstring spkFilePath,
-                                                                      jstring micFilePath,
-                                                                      jstring outputFilePath) {
-    try {
-        const char *spkPath = env->GetStringUTFChars(spkFilePath, nullptr);
-        const char *micPath = env->GetStringUTFChars(micFilePath, nullptr);
-        const char *outPath = env->GetStringUTFChars(outputFilePath, nullptr);
+extern "C" JNIEXPORT jlong JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_createAec(JNIEnv *env, jobject thiz,
+                                                              jint sample_rate) {
+    return reinterpret_cast<jlong>(new AECProcessor(sample_rate));
+}
 
-        auto render_data = LoadPCM16File(spkPath);
-        auto capture_data = LoadPCM16File(micPath);
-        std::vector<int16_t> output_data;
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobject thiz,
+                                                               jlong handle) {
+    delete reinterpret_cast<AECProcessor *>(handle);
+}
 
-        // Validate input lengths
-        if (render_data.size() != capture_data.size()) {
-            throw std::runtime_error("Input files have different lengths");
-        }
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jshortArray render_frame, jshortArray capture_frame) {
+    auto *processor = reinterpret_cast<AECProcessor *>(handle);
+    const size_t samples_per_frame = processor->GetSamplesPerFrame();
 
-        AECProcessor processor(16000);
-        processor.ProcessAudioFrames(render_data, capture_data, output_data);
-
-        SavePCM16File(outPath, output_data);
-
-        env->ReleaseStringUTFChars(spkFilePath, spkPath);
-        env->ReleaseStringUTFChars(micFilePath, micPath);
-        env->ReleaseStringUTFChars(outputFilePath, outPath);
-
-        return true;
-    } catch (const std::exception &e) {
-        env->ThrowNew(env->FindClass("java/lang/RuntimeException"), e.what());
-        return false;
+    if (env->GetArrayLength(render_frame) != samples_per_frame ||
+        env->GetArrayLength(capture_frame) != samples_per_frame) {
+        return nullptr;
     }
+
+    jshort *render = env->GetShortArrayElements(render_frame, nullptr);
+    jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
+    std::vector<int16_t> output(samples_per_frame);
+
+    processor->ProcessFrame(render, capture, output.data());
+
+    jshortArray result = env->NewShortArray(samples_per_frame);
+    env->SetShortArrayRegion(result, 0, samples_per_frame,
+                             reinterpret_cast<const jshort *>(output.data()));
+
+    env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
+    env->ReleaseShortArrayElements(capture_frame, capture, JNI_ABORT);
+
+    return result;
 }
