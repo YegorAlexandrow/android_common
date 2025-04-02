@@ -26,7 +26,7 @@ class JniWrapper {
     external fun gccPhatInit(size: Int)
     external fun gccPhatExecute(x: ByteBuffer, y: ByteBuffer, margin: Int): Int
 
-    external fun createAec(sampleRate: Int): Long
+    external fun createAec(): Long
     external fun destroyAec(handle: Long)
     external fun aecProcessFrame(
         handle: Long,

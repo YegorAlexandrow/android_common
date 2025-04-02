@@ -37,14 +37,6 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
         glob = std::make_unique<decltype(glob)::element_type>(vm);
     });
 
-//    myLog<Prio::E>("INIT AEC3");
-//    webrtc::EchoCanceller3Config config;
-//    // 48 kHz, 1 render channel, 1 capture channel
-//    webrtc::EchoCanceller3 aec3(config, 48000, 1, 1);
-//    myLog<Prio::E>("~INIT AEC3");
-//
-//    myLog<Prio::E>("AEC3 METRICS DELAY MS:  %zu", aec3.GetMetrics().delay_ms);
-
     return JNI_VERSION_1_6;
 }
 
@@ -170,34 +162,51 @@ void SavePCM16File(const std::string &filepath, const std::vector<int16_t> &data
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_tech_fastsense_common_native_1audio_JniWrapper_createAec(JNIEnv *env, jobject thiz,
-                                                              jint sample_rate) {
-    return reinterpret_cast<jlong>(new AECProcessor(sample_rate));
+Java_tech_fastsense_common_native_1audio_JniWrapper_createAec(JNIEnv *env, jobject thiz) {
+    MY_DBG();
+    return reinterpret_cast<jlong>(new AECProcessor());
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobject thiz,
                                                                jlong handle) {
+    MY_DBG();
     delete reinterpret_cast<AECProcessor *>(handle);
+}
+
+// current AECProcessor impl can work only with 240sa 24khz render and 160sa 16khz capture/result
+constexpr auto samples_per_frame = 160;
+constexpr auto samples_per_render_frame = samples_per_frame * 24 / 16;
+//constexpr auto samples_per_render_frame = samples_per_frame;
+
+bool validateChunks(JNIEnv *env, jshortArray render_frame, jshortArray capture_frame) {
+    const auto renderFrameSize = env->GetArrayLength(render_frame);
+    const auto captureFrameSize = env->GetArrayLength(capture_frame);
+
+    const auto passed = renderFrameSize == samples_per_render_frame &&
+                        captureFrameSize == samples_per_frame;
+    if (!passed)
+        myLog<Prio::E>("wrong frame sizes (r|c): %zu | %zu. requested: %zu | %zu",
+                       renderFrameSize, captureFrameSize,
+                       samples_per_render_frame, samples_per_frame);
+    return passed;
 }
 
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
         jshortArray render_frame, jshortArray capture_frame) {
-    auto *processor = reinterpret_cast<AECProcessor *>(handle);
-    const size_t samples_per_frame = processor->GetSamplesPerFrame();
+//    MY_DBG();
 
-    if (env->GetArrayLength(render_frame) != samples_per_frame ||
-        env->GetArrayLength(capture_frame) != samples_per_frame) {
-        return nullptr;
-    }
+    if (!validateChunks(env, render_frame, capture_frame)) return nullptr;
+
+    auto *processor = reinterpret_cast<AECProcessor *>(handle);
 
     jshort *render = env->GetShortArrayElements(render_frame, nullptr);
     jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
     std::vector<int16_t> output(samples_per_frame);
 
-    processor->ProcessFrame(render, capture, output.data());
+    processor->processFrame(render, capture, output.data());
 
     jshortArray result = env->NewShortArray(samples_per_frame);
     env->SetShortArrayRegion(result, 0, samples_per_frame,

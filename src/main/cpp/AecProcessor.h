@@ -10,10 +10,14 @@
 
 class AECProcessor {
 public:
-    explicit AECProcessor(int sample_rate)
-            : sample_rate_(sample_rate),
-              samples_per_frame_(sample_rate / 100),  // 10ms frames
-              config_(sample_rate_, 1)  // StreamConfig with sample rate and channels
+    explicit AECProcessor() :
+            render_sample_rate_(24000),
+//            render_sample_rate_(16000),
+            sample_rate_(16000),
+            // StreamConfig used only for sample rate and channels (webrtc interfaces)
+            // assume implicit resample 24->16 in render_audio_
+            render_config_(render_sample_rate_, 1),
+            capture_config_(sample_rate_, 1)
     {
         webrtc::EchoCanceller3Config aec_config;
         webrtc::EchoCanceller3Factory aec_factory(aec_config);
@@ -22,38 +26,35 @@ public:
         hp_filter_ = std::make_unique<webrtc::HighPassFilter>(sample_rate_, 1);
 
         render_audio_ = std::make_unique<webrtc::AudioBuffer>(
-                config_.sample_rate_hz(), 1,
-                config_.sample_rate_hz(), 1,
-                config_.sample_rate_hz(), 1);
+                render_config_.sample_rate_hz(), 1, // assume implicit resample 24->16
+                capture_config_.sample_rate_hz(), 1,
+                capture_config_.sample_rate_hz(), 1);
 
         capture_audio_ = std::make_unique<webrtc::AudioBuffer>(
-                config_.sample_rate_hz(), 1,
-                config_.sample_rate_hz(), 1,
-                config_.sample_rate_hz(), 1);
+                capture_config_.sample_rate_hz(), 1,
+                capture_config_.sample_rate_hz(), 1,
+                capture_config_.sample_rate_hz(), 1);
     }
 
-    size_t GetSamplesPerFrame() const {
-        return samples_per_frame_;
-    }
-
-    void ProcessFrame(const int16_t *render_frame,
+    void processFrame(const int16_t *render_frame,
                       const int16_t *capture_frame,
                       int16_t *output_frame) {
-        render_audio_->CopyFrom(render_frame, config_);
-        capture_audio_->CopyFrom(capture_frame, config_);
-
+        // assume implicit resample 24->16
+        render_audio_->CopyFrom(render_frame, render_config_);
+        // assume capturing in 16khz
+        capture_audio_->CopyFrom(capture_frame, capture_config_);
         hp_filter_->Process(capture_audio_.get(), true);
         echo_control_->AnalyzeCapture(capture_audio_.get());
         echo_control_->AnalyzeRender(render_audio_.get());
         echo_control_->ProcessCapture(capture_audio_.get(), false);
-
-        capture_audio_->CopyTo(config_, output_frame);
+        capture_audio_->CopyTo(capture_config_, output_frame);
     }
 
 private:
+    const int render_sample_rate_;
     const int sample_rate_;
-    const size_t samples_per_frame_;
-    const webrtc::StreamConfig config_;
+    const webrtc::StreamConfig render_config_;
+    const webrtc::StreamConfig capture_config_;
     std::unique_ptr<webrtc::EchoControl> echo_control_;
     std::unique_ptr<webrtc::HighPassFilter> hp_filter_;
     std::unique_ptr<webrtc::AudioBuffer> render_audio_;
