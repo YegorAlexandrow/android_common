@@ -31,6 +31,7 @@ class JniWrapper {
     external fun aecProcessFrame(
         handle: Long,
         renderFrame: ShortArray,
-        captureFrame: ShortArray
+        captureFrame: ShortArray,
+        additionalGain: Float = -1f // applies only if >0f
     ): ShortArray?
 }

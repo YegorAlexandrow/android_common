@@ -195,7 +195,7 @@ bool validateChunks(JNIEnv *env, jshortArray render_frame, jshortArray capture_f
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
-        jshortArray render_frame, jshortArray capture_frame) {
+        jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain) {
 //    MY_DBG();
 
     if (!validateChunks(env, render_frame, capture_frame)) return nullptr;
@@ -207,6 +207,21 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     std::vector<int16_t> output(samples_per_frame);
 
     processor->processFrame(render, capture, output.data());
+
+    if (additional_gain > 0) {
+//        auto start = std::chrono::high_resolution_clock::now();
+        float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
+        for (int i = 0; i < samples_per_frame; i++) {
+            float sample = static_cast<float>(output[i]) * linear_gain;
+            output[i] = static_cast<int16_t>(
+                    sample > INT16_MAX ? INT16_MAX :
+                    (sample < INT16_MIN ? INT16_MIN : sample)
+            );
+        }
+//        auto end = std::chrono::high_resolution_clock::now();
+//        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+//        myLog("gain %lld μs", duration.count());
+    }
 
     jshortArray result = env->NewShortArray(samples_per_frame);
     env->SetShortArrayRegion(result, 0, samples_per_frame,
