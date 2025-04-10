@@ -39,15 +39,38 @@ public:
     void processFrame(const int16_t *render_frame,
                       const int16_t *capture_frame,
                       int16_t *output_frame) {
+//        namespace ch = std::chrono;
+//        using clock = ch::high_resolution_clock;
+//        const auto cast = [](auto val) { return ch::duration_cast<ch::microseconds>(val).count(); };
+//        auto start = clock::now();
         // assume implicit resample 24->16
         render_audio_->CopyFrom(render_frame, render_config_);
+//        auto duration_rC = cast(clock::now() - start);
+//        start = clock::now();
         // assume capturing in 16khz
         capture_audio_->CopyFrom(capture_frame, capture_config_);
+//        auto duration_cC = cast(clock::now() - start);
+//        start = clock::now();
         hp_filter_->Process(capture_audio_.get(), true);
+//        auto duration_hp = cast(clock::now() - start);
+//        start = clock::now();
         echo_control_->AnalyzeCapture(capture_audio_.get());
+//        auto duration_AC = cast(clock::now() - start);
+//        start = clock::now();
         echo_control_->AnalyzeRender(render_audio_.get());
+//        auto duration_AR = cast(clock::now() - start);
+//        start = clock::now();
         echo_control_->ProcessCapture(capture_audio_.get(), false);
+//        auto duration_PC = cast(clock::now() - start);
+//        start = clock::now();
         capture_audio_->CopyTo(capture_config_, output_frame);
+//        auto duration_oC = cast(clock::now() - start);
+//        myLog(
+//                "rC: %10lld | cC: %10lld | hp: %10lld |  AC: %10lld |  "
+//                "AR: %10lld |  PC: %10lld |  oC: %10lld",
+//                duration_rC, duration_cC, duration_hp, duration_AC,
+//                duration_AR, duration_PC, duration_oC
+//        );
     }
 
 private:
