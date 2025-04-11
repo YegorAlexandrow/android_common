@@ -197,8 +197,8 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
         jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain) {
 //    MY_DBG();
-//    auto start = std::chrono::high_resolution_clock::now();
 
+    if (handle == 0 || render_frame == nullptr || capture_frame == nullptr) return nullptr;
     if (!validateChunks(env, render_frame, capture_frame)) return nullptr;
 
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
@@ -207,10 +207,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
     std::vector<int16_t> output(samples_per_frame);
 
-//    auto aecStart = std::chrono::high_resolution_clock::now();
     processor->processFrame(render, capture, output.data());
-//    auto aecEnd = std::chrono::high_resolution_clock::now();
-//    auto aecDuration = std::chrono::duration_cast<std::chrono::microseconds>(aecEnd - aecStart);
 
     if (additional_gain > 0) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
@@ -229,9 +226,5 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
 
     env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
     env->ReleaseShortArrayElements(capture_frame, capture, JNI_ABORT);
-//    auto end = std::chrono::high_resolution_clock::now();
-//    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-//    myLog("total %20lld, aec: %20lld,", duration.count(), aecDuration.count());
-
     return result;
 }
