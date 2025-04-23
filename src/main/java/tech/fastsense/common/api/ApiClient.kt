@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.preference.PreferenceManager
 import com.android.volley.Request
+import com.google.firebase.auth.ktx.auth
+import com.google.firebase.ktx.Firebase
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import tech.fastsense.common.local_logger.LocalLogger
@@ -26,8 +28,9 @@ class ApiClient(private val context: Context) {
 
     private val deviceId: String
         get() {
-            val s = PreferenceManager.getDefaultSharedPreferences(context)
-            return s.getString("device_id", "www")!!
+//            val s = PreferenceManager.getDefaultSharedPreferences(context)
+//            return s.getString("device_id", "www")!!
+            return Firebase.auth.currentUser?.uid ?: "www"
         }
 
     val idToken: String?
@@ -224,6 +227,7 @@ class ApiClient(private val context: Context) {
     }
 
     fun getAvatarSettings(errorCallback: (Exception) -> Unit = {}, callback: (Map<String, Any?>) -> Unit) {
+        log("deviceId: $deviceId")
         httpClient.getJson(
             "/settings?deviceId=$deviceId",
             errorCallback
