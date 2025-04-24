@@ -34,4 +34,5 @@ class JniWrapper {
         captureFrame: ShortArray,
         additionalGain: Float = -1f // applies only if >0f
     ): ShortArray?
+    external fun recordFromMicrophone(id: Int, path: String)
 }

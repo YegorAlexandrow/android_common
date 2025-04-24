@@ -9,6 +9,10 @@
 #include "api/audio/echo_canceller3_config.h"
 #include "modules/audio_processing/aec3/echo_canceller3.h"
 #include "AecProcessor.h"
+#include <oboe/Oboe.h>
+#include <android/log.h>
+#include <thread>
+#include <chrono>
 
 std::string vectorToString(const std::vector<int16_t> &vec) {
     std::stringstream ss;
@@ -227,4 +231,80 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
     env->ReleaseShortArrayElements(capture_frame, capture, JNI_ABORT);
     return result;
+}
+
+class RecordingCallback : public oboe::AudioStreamCallback {
+public:
+    RecordingCallback(std::ofstream &outFile) : mOutFile(outFile) {}
+
+    oboe::DataCallbackResult onAudioReady(
+            oboe::AudioStream *audioStream,
+            void *audioData,
+            int32_t numFrames) override {
+        mOutFile.write(static_cast<const char*>(audioData), numFrames * sizeof(int16_t));
+        return oboe::DataCallbackResult::Continue;
+    }
+
+private:
+    std::ofstream &mOutFile;
+};
+#define LOG_TAG "OboeRecording"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+extern "C" JNIEXPORT void JNICALL
+        Java_tech_fastsense_common_native_1audio_JniWrapper_recordFromMicrophone(
+                JNIEnv *env,
+                jobject /* this */,
+                jint deviceId,
+                jstring jFilePath) {
+
+    const char *filePath = env->GetStringUTFChars(jFilePath, nullptr);
+    std::ofstream outFile(filePath, std::ios::binary);
+    if (!outFile.is_open()) {
+        LOGE("Failed to open output file");
+        env->ReleaseStringUTFChars(jFilePath, filePath);
+        return;
+    }
+
+    oboe::AudioStreamBuilder builder;
+    builder.setDeviceId(deviceId)
+            ->setDirection(oboe::Direction::Input)
+            ->setInputPreset(oboe::InputPreset::Unprocessed)
+            ->setPrivacySensitiveMode(oboe::PrivacySensitiveMode::Enabled);
+//            ->setSampleRate(16000)
+//            ->setChannelCount(oboe::ChannelCount::Mono)
+//            ->setFormat(oboe::AudioFormat::I16)
+//            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+//            ->setInputPreset(oboe::InputPreset::VoicePerformance);
+
+    RecordingCallback callback(outFile);
+    builder.setCallback(&callback);
+
+    std::shared_ptr<oboe::AudioStream> stream;
+    oboe::Result result = builder.openStream(stream);
+
+    if (result != oboe::Result::OK) {
+        LOGE("Failed to create stream. Error: %s", oboe::convertToText(result));
+        outFile.close();
+        env->ReleaseStringUTFChars(jFilePath, filePath);
+        return;
+    }
+
+    result = stream->requestStart();
+    if (result != oboe::Result::OK) {
+        LOGE("Failed to start stream. Error: %s", oboe::convertToText(result));
+        outFile.close();
+        env->ReleaseStringUTFChars(jFilePath, filePath);
+        return;
+    }
+
+    LOGI("Recording started for 10 seconds...");
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+
+    stream->stop();
+    stream->close();
+    outFile.close();
+    env->ReleaseStringUTFChars(jFilePath, filePath);
+    LOGI("Recording completed and saved to %s", filePath);
 }
