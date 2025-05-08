@@ -266,20 +266,18 @@ extern "C" JNIEXPORT void JNICALL
         env->ReleaseStringUTFChars(jFilePath, filePath);
         return;
     }
+    RecordingCallback callback(outFile);
 
     oboe::AudioStreamBuilder builder;
-    builder.setDeviceId(deviceId)
-            ->setDirection(oboe::Direction::Input)
+    builder.setDirection(oboe::Direction::Input)
+            ->setDeviceId(deviceId)
             ->setInputPreset(oboe::InputPreset::Unprocessed)
-            ->setPrivacySensitiveMode(oboe::PrivacySensitiveMode::Enabled);
-//            ->setSampleRate(16000)
-//            ->setChannelCount(oboe::ChannelCount::Mono)
-//            ->setFormat(oboe::AudioFormat::I16)
-//            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-//            ->setInputPreset(oboe::InputPreset::VoicePerformance);
-
-    RecordingCallback callback(outFile);
-    builder.setCallback(&callback);
+            ->setSampleRate(16000)
+            ->setChannelCount(oboe::ChannelCount::Mono)
+            ->setCallback(&callback)
+            ->setFormat(oboe::AudioFormat::I16)
+            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+            ;
 
     std::shared_ptr<oboe::AudioStream> stream;
     oboe::Result result = builder.openStream(stream);
