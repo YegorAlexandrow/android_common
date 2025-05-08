@@ -13,6 +13,8 @@
 #include <android/log.h>
 #include <thread>
 #include <chrono>
+#include <mutex>
+#include <condition_variable>
 
 std::string vectorToString(const std::vector<int16_t> &vec) {
     std::stringstream ss;
@@ -233,76 +235,155 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     return result;
 }
 
-class RecordingCallback : public oboe::AudioStreamCallback {
-public:
-    RecordingCallback(std::ofstream &outFile) : mOutFile(outFile) {}
-
-    oboe::DataCallbackResult onAudioReady(
-            oboe::AudioStream *audioStream,
-            void *audioData,
-            int32_t numFrames) override {
-        mOutFile.write(static_cast<const char*>(audioData), numFrames * sizeof(int16_t));
-        return oboe::DataCallbackResult::Continue;
-    }
-
-private:
-    std::ofstream &mOutFile;
-};
-#define LOG_TAG "OboeRecording"
+#define LOG_TAG "OboeBlockingRecorder"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
+class BlockingRecorder : public AudioStreamCallback {
+public:
+    BlockingRecorder(int sampleRate, int framesPerBuffer, int id)
+            : mSampleRate(sampleRate), mFramesPerBuffer(framesPerBuffer) {
+        createStream(id);
+    }
+
+    ~BlockingRecorder() {
+        closeStream();
+    }
+
+    void start() {
+        if (mStream) {
+            mStream->requestStart();
+        }
+    }
+
+    void stop() {
+        if (mStream) {
+            mStream->stop();
+        }
+    }
+
+    void read(void *buffer) {
+        std::unique_lock<std::mutex> lock(mMutex);
+        mCondition.wait(lock, [this] { return mBufferReady || mError; });
+
+        if (mError) {
+            memset(buffer, 0, mFramesPerBuffer * sizeof(int16_t));
+            return;
+        }
+
+        memcpy(buffer, mAudioBuffer.data(), mFramesPerBuffer * sizeof(int16_t));
+        mBufferReady = false;
+    }
+
+private:
+    void createStream(int id) {
+        oboe::AudioStreamBuilder builder;
+        builder.setDirection(oboe::Direction::Input)
+                ->setDeviceId(id)
+                ->setInputPreset(oboe::InputPreset::Unprocessed)
+                ->setSampleRate(mSampleRate)
+                ->setChannelCount(oboe::ChannelCount::Mono)
+                ->setFormat(oboe::AudioFormat::I16)
+                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+                ->setFramesPerCallback(mFramesPerBuffer)
+                ->setCallback(this);
+
+        oboe::Result result = builder.openStream(mStream);
+        if (result != oboe::Result::OK) {
+            LOGE("Failed to create stream. Error: %s", oboe::convertToText(result));
+            mError = true;
+            return;
+        }
+
+        mAudioBuffer.resize(mFramesPerBuffer);
+    }
+
+    void closeStream() {
+        if (mStream) {
+            mStream->close();
+            mStream.reset();
+        }
+    }
+
+    oboe::DataCallbackResult onAudioReady(
+            oboe::AudioStream *stream,
+            void *audioData,
+            int32_t numFrames) override {
+        if (numFrames != mFramesPerBuffer) {
+            LOGE("Unexpected frame count: %d", numFrames);
+            return oboe::DataCallbackResult::Continue;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            memcpy(mAudioBuffer.data(), audioData, numFrames * sizeof(int16_t));
+            mBufferReady = true;
+        }
+
+        mCondition.notify_one();
+        return oboe::DataCallbackResult::Continue;
+    }
+
+    int mSampleRate;
+    int mFramesPerBuffer;
+    std::shared_ptr<oboe::AudioStream> mStream;
+    std::vector<int16_t> mAudioBuffer;
+    std::mutex mMutex;
+    std::condition_variable mCondition;
+    bool mBufferReady = false;
+    bool mError = false;
+};
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeCreateRecorder(
+        JNIEnv *env,
+        jobject /* this */,
+        jint sampleRate,
+        jint framesPerBuffer,
+        jint id) {
+    MY_DBG();
+    return reinterpret_cast<jlong>(new BlockingRecorder(sampleRate, framesPerBuffer, id));
+}
+
 extern "C" JNIEXPORT void JNICALL
-        Java_tech_fastsense_common_native_1audio_JniWrapper_recordFromMicrophone(
-                JNIEnv *env,
-                jobject /* this */,
-                jint deviceId,
-                jstring jFilePath) {
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeDestroyRecorder(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong handle) {
+    MY_DBG();
+    auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
+    delete recorder;
+}
 
-    const char *filePath = env->GetStringUTFChars(jFilePath, nullptr);
-    std::ofstream outFile(filePath, std::ios::binary);
-    if (!outFile.is_open()) {
-        LOGE("Failed to open output file");
-        env->ReleaseStringUTFChars(jFilePath, filePath);
-        return;
-    }
-    RecordingCallback callback(outFile);
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStartRecording(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong handle) {
+    MY_DBG();
+    auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
+    recorder->start();
+}
 
-    oboe::AudioStreamBuilder builder;
-    builder.setDirection(oboe::Direction::Input)
-            ->setDeviceId(deviceId)
-            ->setInputPreset(oboe::InputPreset::Unprocessed)
-            ->setSampleRate(16000)
-            ->setChannelCount(oboe::ChannelCount::Mono)
-            ->setCallback(&callback)
-            ->setFormat(oboe::AudioFormat::I16)
-            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-            ;
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRecording(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong handle) {
+    MY_DBG();
+    auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
+    recorder->stop();
+}
 
-    std::shared_ptr<oboe::AudioStream> stream;
-    oboe::Result result = builder.openStream(stream);
-
-    if (result != oboe::Result::OK) {
-        LOGE("Failed to create stream. Error: %s", oboe::convertToText(result));
-        outFile.close();
-        env->ReleaseStringUTFChars(jFilePath, filePath);
-        return;
-    }
-
-    result = stream->requestStart();
-    if (result != oboe::Result::OK) {
-        LOGE("Failed to start stream. Error: %s", oboe::convertToText(result));
-        outFile.close();
-        env->ReleaseStringUTFChars(jFilePath, filePath);
-        return;
-    }
-
-    LOGI("Recording started for 10 seconds...");
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-
-    stream->stop();
-    stream->close();
-    outFile.close();
-    env->ReleaseStringUTFChars(jFilePath, filePath);
-    LOGI("Recording completed and saved to %s", filePath);
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
+        JNIEnv *env,
+        jobject /* this */,
+        jlong handle,
+        jbyteArray buffer) {
+//    MY_DBG();
+    auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
+    jbyte *bufferPtr = env->GetByteArrayElements(buffer, nullptr);
+    recorder->read(bufferPtr);
+    env->ReleaseByteArrayElements(buffer, bufferPtr, 0);
 }

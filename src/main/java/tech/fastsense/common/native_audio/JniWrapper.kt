@@ -34,5 +34,10 @@ class JniWrapper {
         captureFrame: ShortArray,
         additionalGain: Float = -1f // applies only if >0f
     ): ShortArray?
-    external fun recordFromMicrophone(id: Int, path: String)
+
+    external fun oboeCreateRecorder(sampleRate: Int, framesPerBuffer: Int, id: Int): Long
+    external fun oboeDestroyRecorder(handle: Long)
+    external fun oboeStartRecording(handle: Long)
+    external fun oboeStopRecording(handle: Long)
+    external fun oboeRead(handle: Long, buffer: ByteArray)
 }
