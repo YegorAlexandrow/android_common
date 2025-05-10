@@ -8,6 +8,7 @@ import com.android.volley.Request
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import tech.fastsense.common.local_logger.LocalLogger
 import tech.fastsense.common.models.api.IssueCreateResp
@@ -226,7 +227,11 @@ class ApiClient(private val context: Context) {
         ) { callback(it == "true") }
     }
 
-    fun getAvatarSettings(errorCallback: (Exception) -> Unit = {}, callback: (Map<String, Any?>) -> Unit) {
+    fun getAvatarSettings(
+        errorCallback: (Exception) -> Unit = {},
+        extrasCallback: (String) -> Unit = {},
+        callback: (Map<String, Any?>) -> Unit,
+    ) {
         log("deviceId: $deviceId")
         httpClient.getJson(
             "/settings?deviceId=$deviceId",
@@ -239,6 +244,12 @@ class ApiClient(private val context: Context) {
 
                 val editor = PreferenceManager.getDefaultSharedPreferences(context).edit()
                 log(m.entries.joinToString())
+
+                extrasCallback(
+                    JsonParser.parseString(it).asJsonObject.getAsJsonObject("settings")
+                        ?.get("extras")?.takeIf { !it.isJsonNull }?.toString() ?: "{}"
+                )
+
                 fun putMap(
                     vararg mapping: Pair<String, String>,
                     putter: SharedPreferences.Editor.(String, Any) -> Unit
