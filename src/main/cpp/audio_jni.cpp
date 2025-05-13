@@ -180,21 +180,20 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
     delete reinterpret_cast<AECProcessor *>(handle);
 }
 
-// current AECProcessor impl can work only with 240sa 24khz render and 160sa 16khz capture/result
 constexpr auto samples_per_frame = 160;
-constexpr auto samples_per_render_frame = samples_per_frame * 24 / 16;
+constexpr auto samples_per_input_frame = samples_per_frame * 24 / 16;
 //constexpr auto samples_per_render_frame = samples_per_frame;
 
 bool validateChunks(JNIEnv *env, jshortArray render_frame, jshortArray capture_frame) {
     const auto renderFrameSize = env->GetArrayLength(render_frame);
     const auto captureFrameSize = env->GetArrayLength(capture_frame);
 
-    const auto passed = renderFrameSize == samples_per_render_frame &&
-                        captureFrameSize == samples_per_frame;
+    const auto passed = renderFrameSize == samples_per_input_frame &&
+                        captureFrameSize == samples_per_input_frame;
     if (!passed)
         myLog<Prio::E>("wrong frame sizes (r|c): %zu | %zu. requested: %zu | %zu",
                        renderFrameSize, captureFrameSize,
-                       samples_per_render_frame, samples_per_frame);
+                       samples_per_input_frame, samples_per_input_frame);
     return passed;
 }
 
