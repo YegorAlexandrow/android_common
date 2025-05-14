@@ -243,7 +243,6 @@ class ApiClient(private val context: Context) {
                 ) as Map<String, Any?>)["settings"] as Map<String, Any?>
 
                 val editor = PreferenceManager.getDefaultSharedPreferences(context).edit()
-                log(m.entries.joinToString())
 
                 extrasCallback(
                     JsonParser.parseString(it).asJsonObject.getAsJsonObject("settings")
