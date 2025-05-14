@@ -168,9 +168,14 @@ void SavePCM16File(const std::string &filepath, const std::vector<int16_t> &data
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_tech_fastsense_common_native_1audio_JniWrapper_createAec(JNIEnv *env, jobject thiz) {
+Java_tech_fastsense_common_native_1audio_JniWrapper_createAec(JNIEnv *env, jobject thiz,
+                                                              jint reference_sample_rate,
+                                                              jint input_sample_rate,
+                                                              jint processing_sample_rate,
+                                                              jint output_sample_rate) {
     MY_DBG();
-    return reinterpret_cast<jlong>(new AECProcessor());
+    return reinterpret_cast<jlong>(new AECProcessor(reference_sample_rate, input_sample_rate,
+                                                    processing_sample_rate, output_sample_rate));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -180,23 +185,6 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
     delete reinterpret_cast<AECProcessor *>(handle);
 }
 
-constexpr auto samples_per_frame = 160;
-constexpr auto samples_per_input_frame = samples_per_frame * 24 / 16;
-//constexpr auto samples_per_render_frame = samples_per_frame;
-
-bool validateChunks(JNIEnv *env, jshortArray render_frame, jshortArray capture_frame) {
-    const auto renderFrameSize = env->GetArrayLength(render_frame);
-    const auto captureFrameSize = env->GetArrayLength(capture_frame);
-
-    const auto passed = renderFrameSize == samples_per_input_frame &&
-                        captureFrameSize == samples_per_input_frame;
-    if (!passed)
-        myLog<Prio::E>("wrong frame sizes (r|c): %zu | %zu. requested: %zu | %zu",
-                       renderFrameSize, captureFrameSize,
-                       samples_per_input_frame, samples_per_input_frame);
-    return passed;
-}
-
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
@@ -204,19 +192,20 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
 //    MY_DBG();
 
     if (handle == 0 || render_frame == nullptr || capture_frame == nullptr) return nullptr;
-    if (!validateChunks(env, render_frame, capture_frame)) return nullptr;
 
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
+    if (!processor->validateChunks(env, render_frame, capture_frame)) return nullptr;
+    auto output_frame_size = processor->output_frame_size_;
 
     jshort *render = env->GetShortArrayElements(render_frame, nullptr);
     jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
-    std::vector<int16_t> output(samples_per_frame);
+    std::vector<int16_t> output(output_frame_size);
 
     processor->processFrame(render, capture, output.data());
 
     if (additional_gain > 0) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
-        for (int i = 0; i < samples_per_frame; i++) {
+        for (int i = 0; i < output_frame_size; i++) {
             float sample = static_cast<float>(output[i]) * linear_gain;
             output[i] = static_cast<int16_t>(
                     sample > INT16_MAX ? INT16_MAX :
@@ -225,8 +214,8 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         }
     }
 
-    jshortArray result = env->NewShortArray(samples_per_frame);
-    env->SetShortArrayRegion(result, 0, samples_per_frame,
+    jshortArray result = env->NewShortArray(output_frame_size);
+    env->SetShortArrayRegion(result, 0, output_frame_size,
                              reinterpret_cast<const jshort *>(output.data()));
 
     env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
@@ -242,6 +231,7 @@ class BlockingRecorder : public AudioStreamCallback {
 public:
     BlockingRecorder(int sampleRate, int framesPerBuffer, int id)
             : mSampleRate(sampleRate), mFramesPerBuffer(framesPerBuffer) {
+        mAudioBuffer.resize(framesPerBuffer * 4);
         createStream(id);
     }
 
@@ -263,15 +253,26 @@ public:
 
     void read(void *buffer) {
         std::unique_lock<std::mutex> lock(mMutex);
-        mCondition.wait(lock, [this] { return mBufferReady || mError; });
+
+        mCondition.wait(lock, [this] {
+            return ((mAvailableFrames >= mFramesPerBuffer) || mError);
+        });
 
         if (mError) {
             memset(buffer, 0, mFramesPerBuffer * sizeof(int16_t));
             return;
         }
 
-        memcpy(buffer, mAudioBuffer.data(), mFramesPerBuffer * sizeof(int16_t));
-        mBufferReady = false;
+        size_t firstPart = std::min((size_t) mFramesPerBuffer, mAudioBuffer.size() - mReadPos);
+        memcpy(buffer, mAudioBuffer.data() + mReadPos, firstPart * sizeof(int16_t));
+
+        if (firstPart < (size_t) mFramesPerBuffer) {
+            memcpy((int16_t *) buffer + firstPart, mAudioBuffer.data(),
+                   (mFramesPerBuffer - firstPart) * sizeof(int16_t));
+        }
+
+        mReadPos = (mReadPos + mFramesPerBuffer) % mAudioBuffer.size();
+        mAvailableFrames -= mFramesPerBuffer;
     }
 
 private:
@@ -291,10 +292,7 @@ private:
         if (result != oboe::Result::OK) {
             LOGE("Failed to create stream. Error: %s", oboe::convertToText(result));
             mError = true;
-            return;
         }
-
-        mAudioBuffer.resize(mFramesPerBuffer);
     }
 
     void closeStream() {
@@ -308,17 +306,23 @@ private:
             oboe::AudioStream *stream,
             void *audioData,
             int32_t numFrames) override {
-        if (numFrames != mFramesPerBuffer) {
-            LOGE("Unexpected frame count: %d", numFrames);
-            return oboe::DataCallbackResult::Continue;
+        std::lock_guard<std::mutex> lock(mMutex);
+
+        if ((mAudioBuffer.size() - mAvailableFrames) < (size_t) numFrames) {
+            LOGE("Buffer overflow - increasing buffer size");
+            mAudioBuffer.resize(mAudioBuffer.size() * 2);
         }
 
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            memcpy(mAudioBuffer.data(), audioData, numFrames * sizeof(int16_t));
-            mBufferReady = true;
+        size_t writePos = (mReadPos + mAvailableFrames) % mAudioBuffer.size();
+        size_t firstPart = std::min((size_t) numFrames, mAudioBuffer.size() - writePos);
+
+        memcpy(mAudioBuffer.data() + writePos, audioData, firstPart * sizeof(int16_t));
+        if (firstPart < (size_t) numFrames) {
+            memcpy(mAudioBuffer.data(), (int16_t *) audioData + firstPart,
+                   (numFrames - firstPart) * sizeof(int16_t));
         }
 
+        mAvailableFrames += numFrames;
         mCondition.notify_one();
         return oboe::DataCallbackResult::Continue;
     }
@@ -329,7 +333,8 @@ private:
     std::vector<int16_t> mAudioBuffer;
     std::mutex mMutex;
     std::condition_variable mCondition;
-    bool mBufferReady = false;
+    size_t mReadPos = 0;
+    size_t mAvailableFrames = 0;
     bool mError = false;
 };
 

@@ -10,74 +10,88 @@
 
 class AECProcessor {
 public:
-    explicit AECProcessor() :
-            input_sample_rate_(24000),
-//            render_sample_rate_(16000),
-            sample_rate_(16000),
-            // StreamConfig used only for sample rate and channels (webrtc interfaces)
-            // assume implicit resample 24->16 in render_audio_
+    AECProcessor(int reference_sample_rate,
+                 int input_sample_rate,
+                 int processing_sample_rate,
+                 int output_sample_rate
+    ) :
+            reference_sample_rate_(reference_sample_rate),
+            input_sample_rate_(input_sample_rate),
+            processing_sample_rate_(processing_sample_rate),
+            output_sample_rate_(output_sample_rate),
+            reference_frame_size_(getFrameSize(reference_sample_rate_)),
+            input_frame_size_(getFrameSize(input_sample_rate_)),
+            processing_frame_size_(getFrameSize(processing_sample_rate_)),
+            output_frame_size_(getFrameSize(output_sample_rate_)),
+            reference_config_(reference_sample_rate_, 1),
             input_config_(input_sample_rate_, 1),
-            config_(sample_rate_, 1)
+            processing_config_(processing_sample_rate_, 1),
+            output_config_(output_sample_rate_, 1)
     {
         webrtc::EchoCanceller3Config aec_config;
         webrtc::EchoCanceller3Factory aec_factory(aec_config);
 
-        echo_control_ = aec_factory.Create(sample_rate_, 1, 1);
-        hp_filter_ = std::make_unique<webrtc::HighPassFilter>(sample_rate_, 1);
+        echo_control_ = aec_factory.Create(processing_sample_rate_, 1, 1);
+
+        hp_filter_ = std::make_unique<webrtc::HighPassFilter>(processing_sample_rate_, 1);
 
         render_audio_ = std::make_unique<webrtc::AudioBuffer>(
-                input_config_.sample_rate_hz(), 1, // assume implicit resample 24->16
-                config_.sample_rate_hz(), 1,
-                config_.sample_rate_hz(), 1);
+                reference_config_.sample_rate_hz(), 1,
+                processing_config_.sample_rate_hz(), 1,
+                processing_config_.sample_rate_hz(), 1);
 
         capture_audio_ = std::make_unique<webrtc::AudioBuffer>(
-                input_config_.sample_rate_hz(), 1, // assume implicit resample 24->16
-                config_.sample_rate_hz(), 1,
-                config_.sample_rate_hz(), 1);
+                input_config_.sample_rate_hz(), 1,
+                processing_config_.sample_rate_hz(), 1,
+                output_config_.sample_rate_hz(), 1);
     }
 
     void processFrame(const int16_t *render_frame,
                       const int16_t *capture_frame,
                       int16_t *output_frame) {
-//        namespace ch = std::chrono;
-//        using clock = ch::high_resolution_clock;
-//        const auto cast = [](auto val) { return ch::duration_cast<ch::microseconds>(val).count(); };
-//        auto start = clock::now();
-        // assume implicit resample 24->16
-        render_audio_->CopyFrom(render_frame, input_config_);
-//        auto duration_rC = cast(clock::now() - start);
-//        start = clock::now();
-        // assume implicit resample 24->16
+        render_audio_->CopyFrom(render_frame, reference_config_);
         capture_audio_->CopyFrom(capture_frame, input_config_);
-//        auto duration_cC = cast(clock::now() - start);
-//        start = clock::now();
         hp_filter_->Process(capture_audio_.get(), true);
-//        auto duration_hp = cast(clock::now() - start);
-//        start = clock::now();
         echo_control_->AnalyzeCapture(capture_audio_.get());
-//        auto duration_AC = cast(clock::now() - start);
-//        start = clock::now();
         echo_control_->AnalyzeRender(render_audio_.get());
-//        auto duration_AR = cast(clock::now() - start);
-//        start = clock::now();
         echo_control_->ProcessCapture(capture_audio_.get(), false);
-//        auto duration_PC = cast(clock::now() - start);
-//        start = clock::now();
-        capture_audio_->CopyTo(config_, output_frame);
-//        auto duration_oC = cast(clock::now() - start);
-//        myLog(
-//                "rC: %10lld | cC: %10lld | hp: %10lld |  AC: %10lld |  "
-//                "AR: %10lld |  PC: %10lld |  oC: %10lld",
-//                duration_rC, duration_cC, duration_hp, duration_AC,
-//                duration_AR, duration_PC, duration_oC
-//        );
+        capture_audio_->CopyTo(output_config_, output_frame);
     }
 
+    bool validateChunks(JNIEnv *env, jshortArray render_frame, jshortArray capture_frame) {
+        const auto reference_frame_size = env->GetArrayLength(render_frame);
+        const auto input_frame_size = env->GetArrayLength(capture_frame);
+
+        const auto passed = reference_frame_size == reference_frame_size_ &&
+                            input_frame_size == input_frame_size_;
+        if (!passed)
+            myLog<Prio::E>("wrong frame sizes (r|c): %zu | %zu. requested: %zu | %zu",
+                           reference_frame_size, input_frame_size,
+                           reference_frame_size_, input_frame_size_);
+        return passed;
+    }
+
+public:
+    const int
+            reference_sample_rate_,
+            input_sample_rate_,
+            processing_sample_rate_,
+            output_sample_rate_,
+            reference_frame_size_,
+            input_frame_size_,
+            processing_frame_size_,
+            output_frame_size_;
+
+
 private:
-    const int input_sample_rate_;
-    const int sample_rate_;
-    const webrtc::StreamConfig input_config_;
-    const webrtc::StreamConfig config_;
+    constexpr static int getFrameSize(int sample_rate) { return sample_rate / 100; } //10 ms
+
+    const webrtc::StreamConfig
+            reference_config_,
+            input_config_,
+            processing_config_,
+            output_config_;
+
     std::unique_ptr<webrtc::EchoControl> echo_control_;
     std::unique_ptr<webrtc::HighPassFilter> hp_filter_;
     std::unique_ptr<webrtc::AudioBuffer> render_audio_;
