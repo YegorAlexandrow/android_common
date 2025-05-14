@@ -13,8 +13,7 @@ public:
     AECProcessor(int reference_sample_rate,
                  int input_sample_rate,
                  int processing_sample_rate,
-                 int output_sample_rate
-    ) :
+                 int output_sample_rate) :
             reference_sample_rate_(reference_sample_rate),
             input_sample_rate_(input_sample_rate),
             processing_sample_rate_(processing_sample_rate),
@@ -32,7 +31,6 @@ public:
         webrtc::EchoCanceller3Factory aec_factory(aec_config);
 
         echo_control_ = aec_factory.Create(processing_sample_rate_, 1, 1);
-
         hp_filter_ = std::make_unique<webrtc::HighPassFilter>(processing_sample_rate_, 1);
 
         render_audio_ = std::make_unique<webrtc::AudioBuffer>(
@@ -51,10 +49,17 @@ public:
                       int16_t *output_frame) {
         render_audio_->CopyFrom(render_frame, reference_config_);
         capture_audio_->CopyFrom(capture_frame, input_config_);
+
+        render_audio_->SplitIntoFrequencyBands();
+        echo_control_->AnalyzeRender(render_audio_.get());
+        render_audio_->MergeFrequencyBands();
+
+        capture_audio_->SplitIntoFrequencyBands();
         hp_filter_->Process(capture_audio_.get(), true);
         echo_control_->AnalyzeCapture(capture_audio_.get());
-        echo_control_->AnalyzeRender(render_audio_.get());
         echo_control_->ProcessCapture(capture_audio_.get(), false);
+        capture_audio_->MergeFrequencyBands();
+
         capture_audio_->CopyTo(output_config_, output_frame);
     }
 
@@ -81,7 +86,6 @@ public:
             input_frame_size_,
             processing_frame_size_,
             output_frame_size_;
-
 
 private:
     constexpr static int getFrameSize(int sample_rate) { return sample_rate / 100; } //10 ms
