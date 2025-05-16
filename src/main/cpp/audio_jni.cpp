@@ -191,10 +191,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain) {
 //    MY_DBG();
 
-    if (handle == 0 || render_frame == nullptr || capture_frame == nullptr) return nullptr;
-
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
-    if (!processor->validateChunks(env, render_frame, capture_frame)) return nullptr;
     auto output_frame_size = processor->output_frame_size_;
 
     jshort *render = env->GetShortArrayElements(render_frame, nullptr);

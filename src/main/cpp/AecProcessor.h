@@ -63,19 +63,6 @@ public:
         capture_audio_->CopyTo(output_config_, output_frame);
     }
 
-    bool validateChunks(JNIEnv *env, jshortArray render_frame, jshortArray capture_frame) {
-        const auto reference_frame_size = env->GetArrayLength(render_frame);
-        const auto input_frame_size = env->GetArrayLength(capture_frame);
-
-        const auto passed = reference_frame_size == reference_frame_size_ &&
-                            input_frame_size == input_frame_size_;
-        if (!passed)
-            myLog<Prio::E>("wrong frame sizes (r|c): %zu | %zu. requested: %zu | %zu",
-                           reference_frame_size, input_frame_size,
-                           reference_frame_size_, input_frame_size_);
-        return passed;
-    }
-
 public:
     const int
             reference_sample_rate_,
