@@ -232,7 +232,7 @@ class ApiClient(private val context: Context) {
     @SuppressLint("ApplySharedPref")
     fun getAvatarSettings(
         errorCallback: (Exception) -> Unit = {},
-        extrasCallback: (String) -> Unit = {},
+        extrasCallback: (String, String, String, String) -> Unit = { s: String, s1: String, s2: String, s3: String -> },
         callback: (Map<String, Any?>) -> Unit,
     ) {
         log("deviceId: $deviceId")
@@ -247,9 +247,13 @@ class ApiClient(private val context: Context) {
                 ) as Map<String, Any?>)["settings"] as Map<String, Any?>
 
                 val editor = PreferenceManager.getDefaultSharedPreferences(context).edit()
-                extrasCallback(
+                val settingsObj =
                     JsonParser.parseString(it).asJsonObject.getAsJsonObject("settings")
-                        ?.get("extras")?.takeIf { !it.isJsonNull }?.toString() ?: "{}"
+                extrasCallback(
+                    settingsObj?.get("extras")?.takeIf { !it.isJsonNull }?.toString() ?: "{}",
+                    settingsObj?.get("vert")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    settingsObj?.get("geom")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    settingsObj?.get("frag")?.takeIf { !it.isJsonNull }?.asString ?: ""
                 )
 
                 fun putMap(
