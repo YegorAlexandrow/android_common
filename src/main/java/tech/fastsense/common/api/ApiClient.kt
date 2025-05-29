@@ -1,5 +1,6 @@
 package tech.fastsense.common.api
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
@@ -10,6 +11,7 @@ import com.google.firebase.ktx.Firebase
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
+import org.json.JSONObject
 import tech.fastsense.common.local_logger.LocalLogger
 import tech.fastsense.common.models.api.IssueCreateResp
 import tech.fastsense.common.models.api.Link
@@ -227,6 +229,7 @@ class ApiClient(private val context: Context) {
         ) { callback(it == "true") }
     }
 
+    @SuppressLint("ApplySharedPref")
     fun getAvatarSettings(
         errorCallback: (Exception) -> Unit = {},
         extrasCallback: (String) -> Unit = {},
@@ -238,12 +241,12 @@ class ApiClient(private val context: Context) {
             errorCallback
         ) {
             run {
+                logJson(TAG, it)
                 val m = (gson.fromJson(
                     it, Map::class.java
                 ) as Map<String, Any?>)["settings"] as Map<String, Any?>
 
                 val editor = PreferenceManager.getDefaultSharedPreferences(context).edit()
-
                 extrasCallback(
                     JsonParser.parseString(it).asJsonObject.getAsJsonObject("settings")
                         ?.get("extras")?.takeIf { !it.isJsonNull }?.toString() ?: "{}"
@@ -266,6 +269,7 @@ class ApiClient(private val context: Context) {
                     "avatar_smart_mute_enabled" to "mute",
                     "avatar_exhibition_mode" to "exhibitionMode",
                     "avatar_autostart" to "autostart",
+                    "debug_mode" to "debugMode",
                 ) { key, value -> putBoolean(key, value as Boolean) }
 
                 putMap(
@@ -283,7 +287,7 @@ class ApiClient(private val context: Context) {
                 ) { key, value -> putString(key, value.toString()) }
 
                 editor.putString("node_id", m.getOrDefault("nodeId", null)?.toString() ?: "")
-                editor.apply()
+                editor.commit()
 
                 callback(m)
             }
@@ -291,6 +295,14 @@ class ApiClient(private val context: Context) {
     }
 
     companion object {
+
+        fun logJson(tag: String, json: String) = try {
+            val jsonObject = JSONObject(json)
+            Log.e(tag, jsonObject.toString(2))
+        } catch (e: Exception) {
+            Log.e(tag, "Invalid JSON: ${e.message}")
+        }
+
         const val TAG = "ApiClient"
         private fun log(s: String) = Log.e(TAG, s)
         //                private const val API_URL: String = "https://api.wehead.dev/api/v0"  // PROD
