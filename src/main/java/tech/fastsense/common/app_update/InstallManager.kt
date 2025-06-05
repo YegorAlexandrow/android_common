@@ -87,7 +87,10 @@ class InstallManager(private val context: Context) : KoinComponent {
                 val query = DownloadManager.Query().setFilterById(currentDownloadId!!)
                 val c = downloadManager.query(query)
 
-                c.moveToFirst()
+                if (!c.moveToFirst()) {
+                    c.close()
+                    return
+                }
 
                 val bytesDownloaded =
                     c.getInt(c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
