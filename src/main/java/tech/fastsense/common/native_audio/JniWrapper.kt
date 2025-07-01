@@ -30,6 +30,7 @@ class JniWrapper {
         reference: Int, input: Int,
         processing: Int, output: Int
     ): Long
+
     external fun destroyAec(handle: Long)
     external fun aecProcessFrame(
         handle: Long,
@@ -43,4 +44,13 @@ class JniWrapper {
     external fun oboeStartRecording(handle: Long)
     external fun oboeStopRecording(handle: Long)
     external fun oboeRead(handle: Long, buffer: ByteArray)
+
+    external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
+    external fun oboeDestroyRenderer(handle: Long)
+    external fun oboeStartRendering(handle: Long)
+    external fun oboeStopRendering(handle: Long)
+    external fun oboeWrite(handle: Long, buffer: ShortArray)
+
+    external fun oboeIsPlaying(handle: Long): Boolean
+
 }

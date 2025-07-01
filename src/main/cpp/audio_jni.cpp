@@ -26,6 +26,7 @@ std::string vectorToString(const std::vector<int16_t> &vec) {
     }
     return ss.str();
 }
+
 static std::unique_ptr<Glob<DeviceOptions>> glob;
 static gp::GccPhat *gcc_phat;
 
@@ -76,13 +77,13 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_stopCall(JNIEnv *, jobject) 
 extern "C"
 JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_setAudioBusRenderState(JNIEnv *, jobject,
-                                                                         jboolean state) {
+                                                                           jboolean state) {
     glob->fromJni().getBus().setRenderState(state);
 }
 extern "C"
 JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_setAudioBusCaptureState(JNIEnv *, jobject,
-                                                                          jboolean state) {
+                                                                            jboolean state) {
     glob->fromJni().getBus().setCaptureState(state);
 }
 extern "C"
@@ -93,14 +94,14 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_setupCall(JNIEnv *, jobject,
 extern "C"
 JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_setupStorage(JNIEnv *env, jobject thiz,
-                                                               jobject storage) {
+                                                                 jobject storage) {
     glob->fromJni().bindStorage(storage);
 }
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_gccPhatInit(JNIEnv *env, jobject thiz,
-                                                              jint size) {
+                                                                jint size) {
     MY_DBG();
 
     gcc_phat = gp::GccPhat::create();
@@ -111,12 +112,12 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_gccPhatInit(JNIEnv *env, job
 extern "C"
 JNIEXPORT jint JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_gccPhatExecute(JNIEnv *env, jobject thiz,
-                                                                 jobject x, jobject y,
-                                                                 jint margin) {
+                                                                   jobject x, jobject y,
+                                                                   jint margin) {
     MY_DBG();
 
-    auto xData = static_cast<int16_t*>(env->GetDirectBufferAddress(x));
-    auto yData = static_cast<int16_t*>(env->GetDirectBufferAddress(y));
+    auto xData = static_cast<int16_t *>(env->GetDirectBufferAddress(x));
+    auto yData = static_cast<int16_t *>(env->GetDirectBufferAddress(y));
 
     auto xCapacity = env->GetDirectBufferCapacity(x) / sizeof(int16_t);
     auto yCapacity = env->GetDirectBufferCapacity(y) / sizeof(int16_t);
@@ -387,4 +388,142 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
     jbyte *bufferPtr = env->GetByteArrayElements(buffer, nullptr);
     recorder->read(bufferPtr);
     env->ReleaseByteArrayElements(buffer, bufferPtr, 0);
+}
+
+class BlockingAudioRenderer {
+public:
+    BlockingAudioRenderer(int32_t sampleRate, int32_t framesPerBuffer)
+            : sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer) {
+    }
+
+    ~BlockingAudioRenderer() {
+        stop();
+        closeStream();
+    }
+
+    bool initialize() {
+        oboe::AudioStreamBuilder builder;
+        builder.setAudioApi(AudioApi::AAudio)
+                ->setDirection(oboe::Direction::Output)
+                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+                ->setSharingMode(oboe::SharingMode::Exclusive)
+                ->setFormat(oboe::AudioFormat::I16)
+                ->setChannelCount(1)
+                ->setBufferCapacityInFrames(framesPerBuffer_)
+                ->setSampleRate(sampleRate_)
+                ->setFramesPerCallback(framesPerBuffer_)
+                ->setCallback(nullptr);
+
+        oboe::Result result = builder.openStream(stream_);
+        return result == oboe::Result::OK && stream_ != nullptr;
+    }
+
+    void start() {
+        if (stream_) {
+            stream_->requestStart();
+        }
+    }
+
+    void stop() {
+        if (stream_) {
+            stream_->requestStop();
+        }
+    }
+
+    void closeStream() {
+        if (stream_) {
+            stream_->close();
+            stream_.reset();
+        }
+    }
+
+    void write(const int16_t *data, int32_t numFrames) {
+        if (!stream_) return;
+
+        // Infinite timeout for true blocking behavior
+        constexpr int64_t kBlockingTimeout = INT64_MAX;
+        auto result = stream_->write(data, numFrames, kBlockingTimeout);
+
+        if (result.error() == oboe::Result::ErrorClosed) {
+            // Attempt to recover if stream was closed
+            closeStream();
+            initialize();
+            if (stream_) {
+                stream_->requestStart();
+            }
+        }
+    }
+
+    bool isPlaying() const {
+        return stream_ && stream_->getState() == oboe::StreamState::Started;
+    }
+
+private:
+    std::shared_ptr<oboe::AudioStream> stream_;
+    int32_t sampleRate_;
+    int32_t framesPerBuffer_;
+};
+
+// JNI Functions implementation
+extern "C" JNIEXPORT jlong JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeCreateRenderer(JNIEnv *env, jobject thiz,
+                                                                       jint sample_rate,
+                                                                       jint frames_per_buffer) {
+    MY_DBG();
+    auto renderer = new BlockingAudioRenderer(sample_rate, frames_per_buffer);
+    if (!renderer->initialize()) {
+        delete renderer;
+        return 0;
+    }
+    return reinterpret_cast<jlong>(renderer);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeDestroyRenderer(JNIEnv *env, jobject thiz,
+                                                                        jlong handle) {
+    MY_DBG();
+    delete reinterpret_cast<BlockingAudioRenderer *>(handle);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStartRendering(JNIEnv *env, jobject thiz,
+                                                                       jlong handle) {
+    MY_DBG();
+    auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
+    if (renderer) renderer->start();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRendering(JNIEnv *env, jobject thiz,
+                                                                      jlong handle) {
+    MY_DBG();
+    auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
+    if (renderer) renderer->stop();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeWrite(JNIEnv *env, jobject thiz,
+                                                              jlong handle, jshortArray buffer) {
+//    MY_DBG();
+    auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
+    if (!renderer) return;
+
+    jshort *elements = env->GetShortArrayElements(buffer, nullptr);
+    jsize length = env->GetArrayLength(buffer);
+
+    if (elements && length > 0) {
+        renderer->write(elements, length);
+    }
+
+    if (elements) {
+        env->ReleaseShortArrayElements(buffer, elements, JNI_ABORT);
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_oboeIsPlaying(JNIEnv *env, jobject thiz,
+                                                                  jlong handle) {
+    MY_DBG();
+    auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
+    return renderer && renderer->isPlaying() ? JNI_TRUE : JNI_FALSE;
 }
