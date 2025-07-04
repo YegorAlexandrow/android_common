@@ -405,8 +405,8 @@ public:
         oboe::AudioStreamBuilder builder;
         builder.setAudioApi(AudioApi::AAudio)
                 ->setDirection(oboe::Direction::Output)
-                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-                ->setSharingMode(oboe::SharingMode::Exclusive)
+//                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+                ->setSharingMode(oboe::SharingMode::Shared)
                 ->setFormat(oboe::AudioFormat::I16)
                 ->setChannelCount(1)
                 ->setBufferCapacityInFrames(framesPerBuffer_)
