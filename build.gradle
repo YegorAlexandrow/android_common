@@ -73,6 +73,7 @@ dependencies {
     api "io.ktor:ktor-server-cio:$ktor"
     api "io.ktor:ktor-server-websockets:$ktor"
     api "io.ktor:ktor-server-cors:$ktor"
+    api "io.ktor:ktor-server-content-negotiation:$ktor"
     api "io.ktor:ktor-client-core:$ktor"
     api "io.ktor:ktor-client-cio:$ktor"
     api "io.ktor:ktor-client-websockets:$ktor"
