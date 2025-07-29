@@ -24,23 +24,26 @@ private val setPassphraseMethod = builderClass.getDeclaredMethod(
     "setPassphrase", String::class.java, Int::class.java
 )
 private val setSsidMethod = builderClass.getDeclaredMethod("setSsid", String::class.java)
+private val setAutoShutdownEnabledMethod =
+    builderClass.getDeclaredMethod("setAutoShutdownEnabled", Boolean::class.java)
+
 private val buildMethod = builderClass.getDeclaredMethod("build")
 
 class SoftApConfigurationBuilder(c: SoftApConfiguration?) {
-    private val builder: Any?
+    private val builder: Any? = when (c) {
+        null ->
+            builderClass.constructors[0].newInstance()
 
-    init {
-        builder = when (c) {
-            null ->
-                builderClass.constructors[0].newInstance()
-
-            else ->
-                builderClass.constructors[1].newInstance(c)
-        }
+        else ->
+            builderClass.constructors[1].newInstance(c)
     }
 
     fun setSsid(ssid: String) = this.apply {
         setSsidMethod(builder, ssid)
+    }
+
+    fun setAutoShutdownEnabled(enable: Boolean) = this.apply {
+        setAutoShutdownEnabledMethod(builder, enable)
     }
 
     fun setPassphrase(passphrase: String, securityType: Int) = this.apply {
