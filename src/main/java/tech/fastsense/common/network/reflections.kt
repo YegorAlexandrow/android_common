@@ -6,6 +6,10 @@ import android.net.wifi.SoftApConfiguration
 import android.net.wifi.WifiManager
 import java.util.concurrent.Executor
 
+val BAND_2GHZ = 1 shl 0
+val BAND_5GHZ = 1 shl 1
+val BAND_6GHZ = 1 shl 2
+
 private val getSoftApConfigurationMethod =
     WifiManager::class.java.getDeclaredMethod("getSoftApConfiguration")
 private val setSoftApConfigurationMethod =
@@ -26,6 +30,9 @@ private val setPassphraseMethod = builderClass.getDeclaredMethod(
 private val setSsidMethod = builderClass.getDeclaredMethod("setSsid", String::class.java)
 private val setAutoShutdownEnabledMethod =
     builderClass.getDeclaredMethod("setAutoShutdownEnabled", Boolean::class.java)
+private val setBandMethod = builderClass.getDeclaredMethod("setBand", Int::class.java)
+private val setChannelMethod =
+    builderClass.getDeclaredMethod("setChannel", Int::class.java, Int::class.java)
 
 private val buildMethod = builderClass.getDeclaredMethod("build")
 
@@ -48,6 +55,14 @@ class SoftApConfigurationBuilder(c: SoftApConfiguration?) {
 
     fun setPassphrase(passphrase: String, securityType: Int) = this.apply {
         setPassphraseMethod(builder, passphrase, securityType)
+    }
+
+    fun setBand(band: Int) = this.apply {
+        setBandMethod(builder, band)
+    }
+
+    fun setChannel(channel: Int, band: Int) = this.apply {
+        setChannelMethod(builder, channel, band)
     }
 
     fun build() = buildMethod(builder) as SoftApConfiguration
