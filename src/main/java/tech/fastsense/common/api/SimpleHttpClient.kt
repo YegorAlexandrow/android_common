@@ -2,6 +2,7 @@ package tech.fastsense.common.api
 
 import android.content.Context
 import com.android.volley.AuthFailureError
+import com.android.volley.DefaultRetryPolicy
 import com.android.volley.Request
 import com.android.volley.RequestQueue
 import com.android.volley.Response
@@ -16,7 +17,7 @@ class SimpleHttpClient(context: Context, private val apiUrl: String = DEFAULT_AP
     private var requestQueue: RequestQueue = Volley.newRequestQueue(context)
 
     init {
-        getIdToken {  }
+        getIdToken { } //...
     }
 
     fun request(
@@ -26,16 +27,18 @@ class SimpleHttpClient(context: Context, private val apiUrl: String = DEFAULT_AP
         callback: (String) -> Unit,
         errorCallback: (Exception) -> Unit = {},
     ) {
-        getIdToken {
+        getIdToken(errorCallback = errorCallback) {
             run {
                 val r = AuthorizedRequest(
                     method,
                     "$apiUrl$route",
                     it,
                     body,
-                    { run {callback(it.toString())} },
+                    { run { callback(it.toString()) } },
                     { errorCallback(it) }
-                )
+                ).apply {
+                    retryPolicy = DefaultRetryPolicy(5000, 2, 1.5f)
+                }
 
                 requestQueue.add(r)
             }
@@ -48,7 +51,7 @@ class SimpleHttpClient(context: Context, private val apiUrl: String = DEFAULT_AP
         callback: (String) -> Unit,
         errorCallback: (Exception) -> Unit = {},
     ) {
-        getIdToken {
+        getIdToken(errorCallback = errorCallback) {
             run {
                 val r = AuthorizedStringRequest(
                     method,
@@ -56,14 +59,20 @@ class SimpleHttpClient(context: Context, private val apiUrl: String = DEFAULT_AP
                     it,
                     { callback(it) },
                     { errorCallback(it) }
-                )
+                ).apply {
+                    retryPolicy = DefaultRetryPolicy(5000, 2, 1.5f)
+                }
 
                 requestQueue.add(r)
             }
         }
     }
 
-    fun getJson(route: String, errorCallback: (Exception) -> Unit = {}, callback: (String) -> Unit) {
+    fun getJson(
+        route: String,
+        errorCallback: (Exception) -> Unit = {},
+        callback: (String) -> Unit
+    ) {
         stringRequest(Request.Method.GET, route, callback, errorCallback)
     }
 
