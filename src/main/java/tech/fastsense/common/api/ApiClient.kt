@@ -241,7 +241,7 @@ class ApiClient(private val context: Context) {
             errorCallback
         ) {
             run {
-                logJson(TAG, it)
+//                logJson(TAG, it)
                 val m = (gson.fromJson(
                     it, Map::class.java
                 ) as Map<String, Any?>)["settings"] as Map<String, Any?>
