@@ -43,7 +43,7 @@ class JniWrapper {
     external fun oboeDestroyRecorder(handle: Long)
     external fun oboeStartRecording(handle: Long)
     external fun oboeStopRecording(handle: Long)
-    external fun oboeRead(handle: Long, buffer: ByteArray)
+    external fun oboeRead(handle: Long, buffer: ByteArray): Long
 
     external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
     external fun oboeDestroyRenderer(handle: Long)

@@ -249,7 +249,7 @@ public:
         }
     }
 
-    void read(void *buffer) {
+    long read(void *buffer) {
         std::unique_lock<std::mutex> lock(mMutex);
 
         mCondition.wait(lock, [this] {
@@ -258,7 +258,7 @@ public:
 
         if (mError) {
             memset(buffer, 0, mFramesPerBuffer * sizeof(int16_t));
-            return;
+            return 0;
         }
 
         size_t firstPart = std::min((size_t) mFramesPerBuffer, mAudioBuffer.size() - mReadPos);
@@ -271,6 +271,7 @@ public:
 
         mReadPos = (mReadPos + mFramesPerBuffer) % mAudioBuffer.size();
         mAvailableFrames -= mFramesPerBuffer;
+        return static_cast<long>(mAudioBuffer.size());
     }
 
 private:
@@ -307,8 +308,8 @@ private:
         std::lock_guard<std::mutex> lock(mMutex);
 
         if ((mAudioBuffer.size() - mAvailableFrames) < (size_t) numFrames) {
-            LOGE("Buffer overflow - increasing buffer size");
-            mAudioBuffer.resize(mAudioBuffer.size() * 2);
+            mAudioBuffer.resize(mAudioBuffer.size() + mFramesPerBuffer * 4);
+            LOGE("Buffer overflow. New size: %zu", mAudioBuffer.size());
         }
 
         size_t writePos = (mReadPos + mAvailableFrames) % mAudioBuffer.size();
@@ -377,7 +378,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRecording(
     recorder->stop();
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jlong JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
         JNIEnv *env,
         jobject /* this */,
@@ -386,8 +387,9 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
 //    MY_DBG();
     auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
     jbyte *bufferPtr = env->GetByteArrayElements(buffer, nullptr);
-    recorder->read(bufferPtr);
+    auto size = recorder->read(bufferPtr);
     env->ReleaseByteArrayElements(buffer, bufferPtr, 0);
+    return size;
 }
 
 class BlockingAudioRenderer {
