@@ -189,7 +189,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
-        jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain) {
+        jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain, jboolean aec_enabled) {
 //    MY_DBG();
 
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
@@ -199,7 +199,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
     std::vector<int16_t> output(output_frame_size);
 
-    processor->processFrame(render, capture, output.data());
+    processor->processFrame(render, capture, output.data(), aec_enabled);
 
     if (additional_gain > 0) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);

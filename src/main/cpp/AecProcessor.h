@@ -25,8 +25,7 @@ public:
             reference_config_(reference_sample_rate_, 1),
             input_config_(input_sample_rate_, 1),
             processing_config_(processing_sample_rate_, 1),
-            output_config_(output_sample_rate_, 1)
-    {
+            output_config_(output_sample_rate_, 1) {
         webrtc::EchoCanceller3Config aec_config;
         webrtc::EchoCanceller3Factory aec_factory(aec_config);
 
@@ -44,22 +43,21 @@ public:
                 output_config_.sample_rate_hz(), 1);
     }
 
-    void processFrame(const int16_t *render_frame,
-                      const int16_t *capture_frame,
-                      int16_t *output_frame) {
-        render_audio_->CopyFrom(render_frame, reference_config_);
+    void
+    processFrame(const int16_t *render_frame, const int16_t *capture_frame, int16_t *output_frame,
+                 bool aec_enabled) {
         capture_audio_->CopyFrom(capture_frame, input_config_);
-
-        render_audio_->SplitIntoFrequencyBands();
-        echo_control_->AnalyzeRender(render_audio_.get());
-        render_audio_->MergeFrequencyBands();
-
-        capture_audio_->SplitIntoFrequencyBands();
-        hp_filter_->Process(capture_audio_.get(), true);
-        echo_control_->AnalyzeCapture(capture_audio_.get());
-        echo_control_->ProcessCapture(capture_audio_.get(), false);
-        capture_audio_->MergeFrequencyBands();
-
+        if (aec_enabled) {
+            render_audio_->CopyFrom(render_frame, reference_config_);
+            render_audio_->SplitIntoFrequencyBands();
+            echo_control_->AnalyzeRender(render_audio_.get());
+//            render_audio_->MergeFrequencyBands();
+            capture_audio_->SplitIntoFrequencyBands();
+            hp_filter_->Process(capture_audio_.get(), true);
+            echo_control_->AnalyzeCapture(capture_audio_.get());
+            echo_control_->ProcessCapture(capture_audio_.get(), false);
+            capture_audio_->MergeFrequencyBands();
+        }
         capture_audio_->CopyTo(output_config_, output_frame);
     }
 

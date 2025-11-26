@@ -36,7 +36,8 @@ class JniWrapper {
         handle: Long,
         renderFrame: ShortArray,
         captureFrame: ShortArray,
-        additionalGain: Float = -1f // applies only if >0f
+        additionalGain: Float = -1f, // applies only if >0f
+        aecEnabled: Boolean,
     ): ShortArray?
 
     external fun oboeCreateRecorder(sampleRate: Int, framesPerBuffer: Int, id: Int): Long
