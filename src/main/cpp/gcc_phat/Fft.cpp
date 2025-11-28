@@ -9,6 +9,11 @@ namespace gp {
             _insize = n;
             _in = (double *) fftw_malloc(sizeof(double) * n);
 
+            // Pre-calculate Hann window
+            _window.resize(n);
+            for (int i = 0; i < n; i++) {
+                _window[i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / (n - 1)));
+            }
             const int nc = (n / 2) + 1;
             _outsize = nc;
             _out = (fftw_complex *) fftw_malloc(sizeof(fftw_complex) * nc);
@@ -25,7 +30,7 @@ namespace gp {
 
         void execute(std::vector<std::complex<double>> &out, const std::vector<int16_t> &in) {
             for (int i = 0; i < in.size(); i++) {
-                _in[i] = (double) in[i];
+                _in[i] = (double) in[i] * _window[i];
             }
 
             fftw_execute(_plan);
@@ -43,6 +48,7 @@ namespace gp {
         double *_in = nullptr;
         fftw_complex *_out = nullptr;
         fftw_plan _plan{};
+        std::vector<double> _window;
     };
 
     FFT_forward *FFT_forward::create() {
