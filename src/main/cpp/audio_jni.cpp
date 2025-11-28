@@ -545,7 +545,7 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobject thiz,
                                                                jshortArray shorts,
-                                                               jfloatArray magnitudes) {
+                                                               jfloatArray magnitudes, jdouble db_range) {
     jsize input_len = env->GetArrayLength(shorts);
     jshort *input_data = env->GetShortArrayElements(shorts, nullptr);
     jfloat *output_data = env->GetFloatArrayElements(magnitudes, nullptr);
@@ -558,7 +558,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobj
     const double normalization_factor = 1.0 / (32768.0 * fft_output.size());
 
     // Define dB range parameters
-    const double min_dB = -80.0;
+    const double min_dB = db_range;
     const double max_dB = 0.0;
     const double reference_level = 1.0; // Reference for 0 dB
 
