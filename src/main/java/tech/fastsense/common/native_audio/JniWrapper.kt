@@ -53,5 +53,7 @@ class JniWrapper {
     external fun oboeWrite(handle: Long, buffer: ShortArray)
 
     external fun oboeIsPlaying(handle: Long): Boolean
+    external fun initSpectro(n: Int)
+    external fun runSpectro(shorts: ShortArray, magnitudes: FloatArray)
 
 }

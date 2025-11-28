@@ -1,5 +1,6 @@
 #include "Glob.h"
 #include "GccPhat.h"
+#include "Fft.h"
 #include <string>
 #include <sstream>
 #include <cstdint>
@@ -189,7 +190,8 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
-        jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain, jboolean aec_enabled) {
+        jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain,
+        jboolean aec_enabled) {
 //    MY_DBG();
 
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
@@ -528,4 +530,44 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeIsPlaying(JNIEnv *env, j
     MY_DBG();
     auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
     return renderer && renderer->isPlaying() ? JNI_TRUE : JNI_FALSE;
+}
+
+static gp::FFT_forward *forward_FFT = nullptr;
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_initSpectro(JNIEnv *env, jobject thiz, jint n) {
+    forward_FFT = gp::FFT_forward::create();
+    forward_FFT->init(n);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobject thiz,
+                                                               jshortArray shorts,
+                                                               jfloatArray magnitudes) {
+    jsize input_len = env->GetArrayLength(shorts);
+    jshort *input_data = env->GetShortArrayElements(shorts, nullptr);
+    jfloat *output_data = env->GetFloatArrayElements(magnitudes, nullptr);
+
+
+    std::vector<int16_t> input_vec(input_data, input_data + input_len);
+    std::vector<std::complex<double>> fft_output;
+
+    forward_FFT->execute(fft_output, input_vec);
+
+
+    const double normalization_factor = 1.0 / (32768.0 * fft_output.size());
+
+
+    for (int i = 0; i < fft_output.size(); i++) {
+        const auto &complex_val = fft_output[i];
+        double magnitude = std::sqrt(complex_val.real() * complex_val.real() +
+                                     complex_val.imag() * complex_val.imag());
+        output_data[i] = (float) (magnitude * normalization_factor);
+    }
+
+    // Release arrays
+    env->ReleaseShortArrayElements(shorts, input_data, JNI_ABORT);
+    env->ReleaseFloatArrayElements(magnitudes, output_data, 0);
 }
