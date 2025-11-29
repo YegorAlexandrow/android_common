@@ -545,7 +545,9 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobject thiz,
                                                                jshortArray shorts,
-                                                               jfloatArray magnitudes, jdouble db_range) {
+                                                               jfloatArray magnitudes,
+                                                               jdouble db_range,
+                                                               jdouble db_gain) {
     jsize input_len = env->GetArrayLength(shorts);
     jshort *input_data = env->GetShortArrayElements(shorts, nullptr);
     jfloat *output_data = env->GetFloatArrayElements(magnitudes, nullptr);
@@ -557,10 +559,9 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobj
 
     const double normalization_factor = 1.0 / (32768.0 * fft_output.size());
 
-    // Define dB range parameters
     const double min_dB = db_range;
-    const double max_dB = 0.0;
-    const double reference_level = 1.0; // Reference for 0 dB
+    const double max_dB = 0.0 + db_gain;
+    const double reference_level = 1.0;
 
     for (int i = 0; i < fft_output.size(); i++) {
         const auto &complex_val = fft_output[i];
@@ -573,9 +574,10 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobj
         // Convert to dB
         double magnitude_dB = 20.0 * std::log10(normalized_magnitude / reference_level + 1e-10);
 
-        // Clamp to -80..0 dB range and normalize to 0..1
+        magnitude_dB += db_gain;
+
         magnitude_dB = std::max(min_dB, std::min(max_dB, magnitude_dB));
-        output_data[i] = (float)((magnitude_dB - min_dB) / (max_dB - min_dB));
+        output_data[i] = (float) ((magnitude_dB - min_dB) / (max_dB - min_dB));
     }
 
     // Release arrays
