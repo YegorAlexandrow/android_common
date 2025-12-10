@@ -67,8 +67,7 @@ dependencies {
 
     api 'com.google.code.gson:gson:2.11.0'
 
-    def ktor = "2.3.2" // DO NOT UPDATE
-    def ktor_client = "3.3.2"
+    def ktor = "3.3.2"
     api "io.ktor:ktor-server-core:$ktor"
     api "io.ktor:ktor-server-jetty-jvm:$ktor"
     api "io.ktor:ktor-server-cio:$ktor"
@@ -76,13 +75,13 @@ dependencies {
     api "io.ktor:ktor-server-cors:$ktor"
     api "io.ktor:ktor-server-content-negotiation:$ktor"
 
-    api "io.ktor:ktor-client-core:$ktor_client"
-    api "io.ktor:ktor-client-cio:$ktor_client"
-    api "io.ktor:ktor-client-okhttp:$ktor_client"
-    api "io.ktor:ktor-client-websockets:$ktor_client"
-    api "io.ktor:ktor-client-content-negotiation:$ktor_client"
-    api "io.ktor:ktor-serialization-kotlinx-protobuf:$ktor_client"
-    api "io.ktor:ktor-serialization-kotlinx-json-jvm:$ktor_client"
+    api "io.ktor:ktor-client-core:$ktor"
+    api "io.ktor:ktor-client-cio:$ktor"
+    api "io.ktor:ktor-client-okhttp:$ktor"
+    api "io.ktor:ktor-client-websockets:$ktor"
+    api "io.ktor:ktor-client-content-negotiation:$ktor"
+    api "io.ktor:ktor-serialization-kotlinx-protobuf:$ktor"
+    api "io.ktor:ktor-serialization-kotlinx-json-jvm:$ktor"
 
     api 'com.google.oboe:oboe:1.9.3'
 

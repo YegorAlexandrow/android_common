@@ -431,50 +431,50 @@ class AvatarAudioServer(private val context: Context) : KoinComponent {
         initAudioTrack()
         initAudioRecord()
         jni.gccPhatInit(gccSamples)
-        server = embeddedServer(Jetty, port = 8082) {
-            install(WebSockets)
-            routing {
-                webSocket("/") {
-                    val time = System.currentTimeMillis()
-                    log("audio ws connected at: $time")
-                    try {
-                        if (writeDbgFiles) {
-                            spk24fFos = FileOutputStream(filePath + "spk24f_" + time)
-                            spkFos = FileOutputStream(filePath + "spk_" + time)
-                            micFos = FileOutputStream(filePath + "mic_" + time)
-                            resFos = FileOutputStream(filePath + "res_" + time)
-                        }
-                        if (audioStreamConnected) throw RuntimeException("audio stream socket already connected")
-                        audioStreamConnected = true
-                        listOf(
-                            async(Dispatchers.IO) { inputChunks() },
-                            async(Dispatchers.IO) { handleClient() },
-                        ).joinAll()
-                    } catch (_: CancellationException) {
-                        log("canceled")
-                    } catch (e: Exception) {
-                        log("audio ws got exception: $e")
-                    } finally {
-                        log("audio ws closed")
-                        this.close()
-                        audioStreamConnected = false
-                        audioTrack!!.stop()
-                        audioTrack!!.release()
-                        audioRecord!!.stop()
-                        audioRecord!!.release()
-
-                        spk24fFos?.flush()
-                        spkFos?.flush()
-                        micFos?.flush()
-                        resFos?.flush()
-                        spk24fFos?.close()
-                        spkFos?.close()
-                        micFos?.close()
-                        resFos?.close()
-                    }
-                }
-            }
-        }.start(wait = false)
+//        server = embeddedServer(Jetty, port = 8082) {
+//            install(WebSockets)
+//            routing {
+//                webSocket("/") {
+//                    val time = System.currentTimeMillis()
+//                    log("audio ws connected at: $time")
+//                    try {
+//                        if (writeDbgFiles) {
+//                            spk24fFos = FileOutputStream(filePath + "spk24f_" + time)
+//                            spkFos = FileOutputStream(filePath + "spk_" + time)
+//                            micFos = FileOutputStream(filePath + "mic_" + time)
+//                            resFos = FileOutputStream(filePath + "res_" + time)
+//                        }
+//                        if (audioStreamConnected) throw RuntimeException("audio stream socket already connected")
+//                        audioStreamConnected = true
+//                        listOf(
+//                            async(Dispatchers.IO) { inputChunks() },
+//                            async(Dispatchers.IO) { handleClient() },
+//                        ).joinAll()
+//                    } catch (_: CancellationException) {
+//                        log("canceled")
+//                    } catch (e: Exception) {
+//                        log("audio ws got exception: $e")
+//                    } finally {
+//                        log("audio ws closed")
+//                        this.close()
+//                        audioStreamConnected = false
+//                        audioTrack!!.stop()
+//                        audioTrack!!.release()
+//                        audioRecord!!.stop()
+//                        audioRecord!!.release()
+//
+//                        spk24fFos?.flush()
+//                        spkFos?.flush()
+//                        micFos?.flush()
+//                        resFos?.flush()
+//                        spk24fFos?.close()
+//                        spkFos?.close()
+//                        micFos?.close()
+//                        resFos?.close()
+//                    }
+//                }
+//            }
+//        }.start(wait = false)
     }
 
 
