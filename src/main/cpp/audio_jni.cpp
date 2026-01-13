@@ -191,7 +191,7 @@ extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         JNIEnv *env, jobject thiz, jlong handle,
         jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain,
-        jboolean aec_enabled) {
+        jboolean aec_enabled, jboolean agc_enabled) {
 //    MY_DBG();
 
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
@@ -201,9 +201,9 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
     std::vector<int16_t> output(output_frame_size);
 
-    processor->processFrame(render, capture, output.data(), aec_enabled);
+    processor->processFrame(render, capture, output.data(), aec_enabled, agc_enabled);
 
-    if (additional_gain > 0) {
+    if (additional_gain > 0 && !agc_enabled) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
         for (int i = 0; i < output_frame_size; i++) {
             float sample = static_cast<float>(output[i]) * linear_gain;
@@ -221,6 +221,13 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
     env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
     env->ReleaseShortArrayElements(capture_frame, capture, JNI_ABORT);
     return result;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_aecGetDelay(JNIEnv *env, jobject thiz,
+                                                                jlong handle) {
+    return reinterpret_cast<AECProcessor *>(handle)->getDelay();
 }
 
 #define LOG_TAG "OboeBlockingRecorder"

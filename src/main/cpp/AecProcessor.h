@@ -7,6 +7,7 @@
 #include "modules/audio_processing/audio_buffer.h"
 #include "modules/audio_processing/high_pass_filter.h"
 #include "api/audio/echo_canceller3_factory.h"
+#include "modules/audio_processing/gain_controller2.h"
 
 class AECProcessor {
 public:
@@ -30,6 +31,26 @@ public:
         webrtc::EchoCanceller3Factory aec_factory(aec_config);
 
         echo_control_ = aec_factory.Create(processing_sample_rate_, 1, 1);
+
+        gain_controller2 = std::make_unique<webrtc::GainController2>();
+        using gc_config = webrtc::AudioProcessing::Config::GainController2;
+        gc_config config;
+        config.enabled = true;
+        // fixed gain
+        config.fixed_digital.gain_db = 22.0f; // todo? pass here preferred mic gain?
+        // dynamic gain
+        config.adaptive_digital.enabled = true;
+        config.adaptive_digital.noise_estimator = gc_config::kNoiseFloor;  // for variable noise
+        config.adaptive_digital.vad_reset_period_ms = 1500;                // speech timeout
+        config.adaptive_digital.adjacent_speech_frames_threshold = 12;     // speech detection
+        config.adaptive_digital.max_gain_change_db_per_second = 30.0f;      // smooth transitions
+        config.adaptive_digital.max_output_noise_level_dbfs = -40.0f;      // limits noise boosting
+        auto res = webrtc::GainController2::Validate(config);
+        myLog("agc validate res: %d", res);
+
+        gain_controller2->ApplyConfig(config);
+        gain_controller2->Initialize(processing_sample_rate_);
+
         hp_filter_ = std::make_unique<webrtc::HighPassFilter>(processing_sample_rate_, 1);
 
         render_audio_ = std::make_unique<webrtc::AudioBuffer>(
@@ -43,22 +64,28 @@ public:
                 output_config_.sample_rate_hz(), 1);
     }
 
-    void
-    processFrame(const int16_t *render_frame, const int16_t *capture_frame, int16_t *output_frame,
-                 bool aec_enabled) {
+    void processFrame(const int16_t *render_frame, const int16_t *capture_frame,
+                      int16_t *output_frame, bool aec_enabled, bool agc_enabled) {
         capture_audio_->CopyFrom(capture_frame, input_config_);
-        if (aec_enabled) {
+        if (aec_enabled) { // todo SetCaptureOutputUsage
             render_audio_->CopyFrom(render_frame, reference_config_);
             render_audio_->SplitIntoFrequencyBands();
             echo_control_->AnalyzeRender(render_audio_.get());
-//            render_audio_->MergeFrequencyBands();
+//          render_audio_->MergeFrequencyBands();  not used below
             capture_audio_->SplitIntoFrequencyBands();
             hp_filter_->Process(capture_audio_.get(), true);
             echo_control_->AnalyzeCapture(capture_audio_.get());
             echo_control_->ProcessCapture(capture_audio_.get(), false);
             capture_audio_->MergeFrequencyBands();
         }
+        if (agc_enabled) {
+            gain_controller2->Process(capture_audio_.get());
+        }
         capture_audio_->CopyTo(output_config_, output_frame);
+    }
+
+    int getDelay() {
+        return echo_control_->GetMetrics().delay_ms;
     }
 
 public:
@@ -82,6 +109,7 @@ private:
             output_config_;
 
     std::unique_ptr<webrtc::EchoControl> echo_control_;
+    std::unique_ptr<webrtc::GainController2> gain_controller2;
     std::unique_ptr<webrtc::HighPassFilter> hp_filter_;
     std::unique_ptr<webrtc::AudioBuffer> render_audio_;
     std::unique_ptr<webrtc::AudioBuffer> capture_audio_;

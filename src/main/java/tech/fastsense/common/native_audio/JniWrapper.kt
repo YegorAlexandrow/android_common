@@ -38,7 +38,10 @@ class JniWrapper {
         captureFrame: ShortArray,
         additionalGain: Float = -1f, // applies only if >0f
         aecEnabled: Boolean,
+        agcEnabled: Boolean,
     ): ShortArray?
+
+    external fun aecGetDelay(handle: Long): Int
 
     external fun oboeCreateRecorder(sampleRate: Int, framesPerBuffer: Int, id: Int): Long
     external fun oboeDestroyRecorder(handle: Long)
@@ -54,6 +57,11 @@ class JniWrapper {
 
     external fun oboeIsPlaying(handle: Long): Boolean
     external fun initSpectro(n: Int)
-    external fun runSpectro(shorts: ShortArray, magnitudes: FloatArray, dbRange: Double, dbGain: Double)
+    external fun runSpectro(
+        shorts: ShortArray,
+        magnitudes: FloatArray,
+        dbRange: Double,
+        dbGain: Double
+    )
 
 }
