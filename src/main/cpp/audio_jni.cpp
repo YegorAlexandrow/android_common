@@ -258,7 +258,10 @@ public:
         }
     }
 
+    size_t logCounter = 0;
+
     long read(void *buffer) {
+
         std::unique_lock<std::mutex> lock(mMutex);
 
         mCondition.wait(lock, [this] {
@@ -280,6 +283,15 @@ public:
 
         mReadPos = (mReadPos + mFramesPerBuffer) % mAudioBuffer.size();
         mAvailableFrames -= mFramesPerBuffer;
+
+        if (!(logCounter++ % 5000))
+            myLog("MIC: FramesPerBurst: %d, XRunCount: %d, "
+                  "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
+                  mStream->getFramesPerBurst(),
+                  mStream->getXRunCount().value(),
+                  mStream->getBufferCapacityInFrames(), mStream->getBufferSizeInFrames()
+            );
+
         return static_cast<long>(mAudioBuffer.size());
     }
 
@@ -401,10 +413,11 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
     return size;
 }
 
-class BlockingAudioRenderer {
+class BlockingAudioRenderer : public oboe::AudioStreamCallback {
 public:
     BlockingAudioRenderer(int32_t sampleRate, int32_t framesPerBuffer)
-            : sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer) {
+            : sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer), bufferReady_(false) {
+        currentBuffer_.resize(framesPerBuffer);
     }
 
     ~BlockingAudioRenderer() {
@@ -416,14 +429,14 @@ public:
         oboe::AudioStreamBuilder builder;
         builder.setAudioApi(AudioApi::AAudio)
                 ->setDirection(oboe::Direction::Output)
-//                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-                ->setSharingMode(oboe::SharingMode::Shared)
+                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+                ->setSharingMode(oboe::SharingMode::Exclusive)
                 ->setFormat(oboe::AudioFormat::I16)
                 ->setChannelCount(1)
-                ->setBufferCapacityInFrames(framesPerBuffer_)
+                ->setBufferCapacityInFrames(framesPerBuffer_ * 2)
                 ->setSampleRate(sampleRate_)
                 ->setFramesPerCallback(framesPerBuffer_)
-                ->setCallback(nullptr);
+                ->setCallback(this);
 
         oboe::Result result = builder.openStream(stream_);
         return result == oboe::Result::OK && stream_ != nullptr;
@@ -448,15 +461,57 @@ public:
         }
     }
 
+    size_t logCounter = 0;
+
     void write(const int16_t *data, int32_t numFrames) {
         if (!stream_) return;
 
-        // Infinite timeout for true blocking behavior
-        constexpr int64_t kBlockingTimeout = INT64_MAX;
-        auto result = stream_->write(data, numFrames, kBlockingTimeout);
+        std::unique_lock<std::mutex> lock(mutex_);
+        condVar_.wait(lock, [this] { return !bufferReady_; });
+        std::copy(data, data + numFrames, currentBuffer_.begin());
+        bufferReady_ = true;
+        lock.unlock();
+        condVar_.notify_one();
 
-        if (result.error() == oboe::Result::ErrorClosed) {
-            // Attempt to recover if stream was closed
+        if (logCounter++ % 5000) return;
+        myLog("SPK: FramesPerBurst: %d, XRunCount: %d, "
+              "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
+              stream_->getFramesPerBurst(),
+              stream_->getXRunCount().value(),
+              stream_->getBufferCapacityInFrames(), stream_->getBufferSizeInFrames()
+        );
+    }
+
+    bool isPlaying() const {
+        return stream_ && stream_->getState() == oboe::StreamState::Started;
+    }
+
+    oboe::DataCallbackResult onAudioReady(
+            oboe::AudioStream *audioStream,
+            void *audioData,
+            int32_t numFrames) override {
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        bool waitedTooLong = !condVar_.wait_for(lock, std::chrono::milliseconds(5),
+                                                [this] { return bufferReady_; });
+
+        if (waitedTooLong) {
+            myLog("UNDERRUN DETECTED");
+
+        }
+
+        auto *output = static_cast<int16_t *>(audioData);
+        std::copy(currentBuffer_.begin(), currentBuffer_.end(), output);
+        bufferReady_ = false;
+
+        lock.unlock();
+        condVar_.notify_one();
+
+        return oboe::DataCallbackResult::Continue;
+    }
+
+    void onErrorAfterClose(oboe::AudioStream *stream, oboe::Result error) override {
+        if (error == oboe::Result::ErrorDisconnected) {
             closeStream();
             initialize();
             if (stream_) {
@@ -465,14 +520,15 @@ public:
         }
     }
 
-    bool isPlaying() const {
-        return stream_ && stream_->getState() == oboe::StreamState::Started;
-    }
-
 private:
     std::shared_ptr<oboe::AudioStream> stream_;
     int32_t sampleRate_;
     int32_t framesPerBuffer_;
+
+    std::vector<int16_t> currentBuffer_;
+    std::mutex mutex_;
+    std::condition_variable condVar_;
+    bool bufferReady_;
 };
 
 // JNI Functions implementation

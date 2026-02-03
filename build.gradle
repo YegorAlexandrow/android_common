@@ -83,7 +83,7 @@ dependencies {
     api "io.ktor:ktor-serialization-kotlinx-protobuf:$ktor"
     api "io.ktor:ktor-serialization-kotlinx-json-jvm:$ktor"
 
-    api 'com.google.oboe:oboe:1.9.3'
+    api 'com.google.oboe:oboe:1.10.0'
 
     api "org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.6.0"
 
