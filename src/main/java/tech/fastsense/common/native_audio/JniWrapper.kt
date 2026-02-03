@@ -12,6 +12,10 @@ class JniWrapper {
         }
     }
 
+    interface RenderCallback {
+        fun run(): ShortArray
+    }
+
     external fun setupTest(assets: AssetManager, cb: NativeSpeakerTest.JniCallback, name: String)
     external fun setupStorage(storage: CloudStorageApi)
     external fun runAudioSystemTest()
@@ -51,9 +55,11 @@ class JniWrapper {
 
     external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
     external fun oboeDestroyRenderer(handle: Long)
-    external fun oboeStartRendering(handle: Long)
+    external fun oboeStartRendering(
+        handle: Long,
+        renderCallback: RenderCallback
+    )
     external fun oboeStopRendering(handle: Long)
-    external fun oboeWrite(handle: Long, buffer: ShortArray)
 
     external fun oboeIsPlaying(handle: Long): Boolean
     external fun initSpectro(n: Int)

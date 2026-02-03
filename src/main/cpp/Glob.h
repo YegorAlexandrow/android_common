@@ -26,10 +26,13 @@ private:
     std::unique_ptr<SpeakerTestCallback> cb;
     std::unique_ptr<Storage> storage;
 
-    SafeJavaVM vm;
     DeviceDuplex<Options> duplex;
 
 public:
+
+    SafeJavaVM vm;
+
+
     Glob(JavaVM *vm_) : vm(vm_) {
         MY_DBG();
         vm.passExtEnv();

@@ -30,8 +30,8 @@ inline auto myLog(const char (&fmt)[N], T &&...x) {
 
 inline thread_local unsigned long dbg_ctr{};
 
-#define MY_DBG() ((void)(myLog("%lu %s, %i, %s",++dbg_ctr, __FILE__, __LINE__, __PRETTY_FUNCTION__)))
-//#define MY_DBG()
+//#define MY_DBG() ((void)(myLog("%lu %s, %i, %s",++dbg_ctr, __FILE__, __LINE__, __PRETTY_FUNCTION__)))
+#define MY_DBG()
 
 #pragma clang diagnostic pop
 

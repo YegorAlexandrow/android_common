@@ -415,8 +415,9 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
 
 class BlockingAudioRenderer : public oboe::AudioStreamCallback {
 public:
-    BlockingAudioRenderer(int32_t sampleRate, int32_t framesPerBuffer)
-            : sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer), bufferReady_(false) {
+    BlockingAudioRenderer(SafeJavaVM &vm_, int32_t sampleRate, int32_t framesPerBuffer)
+            : vm(vm_), sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
+              bufferReady_(false) {
         currentBuffer_.resize(framesPerBuffer);
     }
 
@@ -442,8 +443,9 @@ public:
         return result == oboe::Result::OK && stream_ != nullptr;
     }
 
-    void start() {
+    void start(jobject jcb) {
         if (stream_) {
+            cb = std::make_unique<RenderCallback>(vm, jcb);
             stream_->requestStart();
         }
     }
@@ -461,7 +463,6 @@ public:
         }
     }
 
-    size_t logCounter = 0;
 
     void write(const int16_t *data, int32_t numFrames) {
         if (!stream_) return;
@@ -473,13 +474,7 @@ public:
         lock.unlock();
         condVar_.notify_one();
 
-        if (logCounter++ % 5000) return;
-        myLog("SPK: FramesPerBurst: %d, XRunCount: %d, "
-              "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
-              stream_->getFramesPerBurst(),
-              stream_->getXRunCount().value(),
-              stream_->getBufferCapacityInFrames(), stream_->getBufferSizeInFrames()
-        );
+
     }
 
     bool isPlaying() const {
@@ -490,23 +485,24 @@ public:
             oboe::AudioStream *audioStream,
             void *audioData,
             int32_t numFrames) override {
-
-        std::unique_lock<std::mutex> lock(mutex_);
-        bool waitedTooLong = !condVar_.wait_for(lock, std::chrono::milliseconds(5),
-                                                [this] { return bufferReady_; });
-
-        if (waitedTooLong) {
-            myLog("UNDERRUN DETECTED");
-
+        auto env = vm.getEnv();
+        auto jsa = cb->run();
+        jshort *elements = env->GetShortArrayElements(jsa, nullptr);
+        jsize length = env->GetArrayLength(jsa);
+        if (elements && length > 0) {
+            auto *output = static_cast<int16_t *>(audioData);
+            std::copy(elements, elements + length, output);
         }
-
-        auto *output = static_cast<int16_t *>(audioData);
-        std::copy(currentBuffer_.begin(), currentBuffer_.end(), output);
-        bufferReady_ = false;
-
-        lock.unlock();
-        condVar_.notify_one();
-
+        if (elements) {
+            env->ReleaseShortArrayElements(jsa, elements, JNI_ABORT);
+        }
+        if (logCounter++ % 1000 == 0)
+            myLog("SPK: FramesPerBurst: %d, XRunCount: %d, "
+                  "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
+                  stream_->getFramesPerBurst(),
+                  stream_->getXRunCount().value(),
+                  stream_->getBufferCapacityInFrames(), stream_->getBufferSizeInFrames()
+            );
         return oboe::DataCallbackResult::Continue;
     }
 
@@ -521,14 +517,49 @@ public:
     }
 
 private:
+
+    struct RenderCallback {
+
+        RenderCallback(SafeJavaVM &vm, jobject jcb) : vm(vm), o(vm, jcb) {
+            MY_DBG();
+        }
+
+        jshortArray run() {
+            MY_DBG();
+            return reinterpret_cast<jshortArray>(o.call<MI::run>());
+        }
+
+    private:
+        enum class MI {
+            run
+        };
+        SafeJavaVM &vm;
+
+        JavaObject<MI,
+                MethodDescription{
+                        MI::run,
+                        ReturnType<jobject>{},
+                        "run",
+                        "()[S"
+                }> o;
+    };
+
+    SafeJavaVM &vm;
+
+
+    std::unique_ptr<RenderCallback> cb;
+
     std::shared_ptr<oboe::AudioStream> stream_;
     int32_t sampleRate_;
     int32_t framesPerBuffer_;
 
+
     std::vector<int16_t> currentBuffer_;
     std::mutex mutex_;
     std::condition_variable condVar_;
+    size_t logCounter = 0;
     bool bufferReady_;
+
 };
 
 // JNI Functions implementation
@@ -537,7 +568,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeCreateRenderer(JNIEnv *e
                                                                        jint sample_rate,
                                                                        jint frames_per_buffer) {
     MY_DBG();
-    auto renderer = new BlockingAudioRenderer(sample_rate, frames_per_buffer);
+    auto renderer = new BlockingAudioRenderer(glob->vm, sample_rate, frames_per_buffer);
     if (!renderer->initialize()) {
         delete renderer;
         return 0;
@@ -554,10 +585,10 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeDestroyRenderer(JNIEnv *
 
 extern "C" JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStartRendering(JNIEnv *env, jobject thiz,
-                                                                       jlong handle) {
+                                                                       jlong handle, jobject jcb) {
     MY_DBG();
     auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
-    if (renderer) renderer->start();
+    if (renderer) renderer->start(jcb);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -566,25 +597,6 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRendering(JNIEnv *en
     MY_DBG();
     auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
     if (renderer) renderer->stop();
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_tech_fastsense_common_native_1audio_JniWrapper_oboeWrite(JNIEnv *env, jobject thiz,
-                                                              jlong handle, jshortArray buffer) {
-//    MY_DBG();
-    auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
-    if (!renderer) return;
-
-    jshort *elements = env->GetShortArrayElements(buffer, nullptr);
-    jsize length = env->GetArrayLength(buffer);
-
-    if (elements && length > 0) {
-        renderer->write(elements, length);
-    }
-
-    if (elements) {
-        env->ReleaseShortArrayElements(buffer, elements, JNI_ABORT);
-    }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
