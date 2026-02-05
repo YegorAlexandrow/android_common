@@ -186,24 +186,45 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
     MY_DBG();
     delete reinterpret_cast<AECProcessor *>(handle);
 }
+namespace sc = std::chrono;
+using schrc = sc::high_resolution_clock;
+size_t renderLogCounter = 0;
+sc::duration<double, std::milli> renderElapsedMax{};
+
+extern "C" JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessRender(JNIEnv *env, jobject thiz,
+                                                                     jlong handle,
+                                                                     jshortArray render_frame) {
+//    MY_DBG();
+
+
+    auto start = schrc::now();
+    auto *processor = reinterpret_cast<AECProcessor *>(handle);
+    auto render = env->GetShortArrayElements(render_frame, nullptr);
+    processor->processRender(render);
+    env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
+    sc::duration<double, std::milli> elapsed = schrc::now() - start;
+    if (elapsed > renderElapsedMax) renderElapsedMax = elapsed;
+    if (!(renderLogCounter++ % 1000))
+        myLog("aecProcessRender duration/max: %f/%f", elapsed.count(), renderElapsedMax.count());
+}
 
 extern "C" JNIEXPORT jshortArray JNICALL
-Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
-        JNIEnv *env, jobject thiz, jlong handle,
-        jshortArray render_frame, jshortArray capture_frame, jfloat additional_gain,
-        jboolean aec_enabled, jboolean agc_enabled) {
+Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *env, jobject thiz,
+                                                                      jlong handle,
+                                                                      jshortArray capture_frame,
+                                                                      jfloat additional_gain) {
 //    MY_DBG();
 
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
     auto output_frame_size = processor->output_frame_size_;
 
-    jshort *render = env->GetShortArrayElements(render_frame, nullptr);
-    jshort *capture = env->GetShortArrayElements(capture_frame, nullptr);
+    auto capture = env->GetShortArrayElements(capture_frame, nullptr);
     std::vector<int16_t> output(output_frame_size);
 
-    processor->processFrame(render, capture, output.data(), aec_enabled, agc_enabled);
+    processor->processCapture(capture, output.data());
 
-    if (additional_gain > 0 && !agc_enabled) {
+    if (additional_gain > 0) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
         for (int i = 0; i < output_frame_size; i++) {
             float sample = static_cast<float>(output[i]) * linear_gain;
@@ -214,11 +235,10 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessFrame(
         }
     }
 
-    jshortArray result = env->NewShortArray(output_frame_size);
+    auto result = env->NewShortArray(output_frame_size);
     env->SetShortArrayRegion(result, 0, output_frame_size,
                              reinterpret_cast<const jshort *>(output.data()));
 
-    env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
     env->ReleaseShortArrayElements(capture_frame, capture, JNI_ABORT);
     return result;
 }
@@ -236,18 +256,20 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecGetDelay(JNIEnv *env, job
 
 class BlockingRecorder : public AudioStreamCallback {
 public:
-    BlockingRecorder(int sampleRate, int framesPerBuffer, int id)
-            : mSampleRate(sampleRate), mFramesPerBuffer(framesPerBuffer) {
-        mAudioBuffer.resize(framesPerBuffer * 4);
+    BlockingRecorder(SafeJavaVM &vm_, int sampleRate, int framesPerBuffer, int id)
+            : vm(vm_), mSampleRate(sampleRate), mFramesPerBuffer(framesPerBuffer) {
         createStream(id);
+        auto env = vm.getEnv();
+        result = (jbyteArray) env->NewGlobalRef(env->NewByteArray(mFramesPerBuffer * 2));
     }
 
     ~BlockingRecorder() {
         closeStream();
     }
 
-    void start() {
+    void start(jobject jcb) {
         if (mStream) {
+            cb = std::make_unique<CaptureCallback>(vm, jcb);
             mStream->requestStart();
         }
     }
@@ -260,52 +282,23 @@ public:
 
     size_t logCounter = 0;
 
-    long read(void *buffer) {
-
-        std::unique_lock<std::mutex> lock(mMutex);
-
-        mCondition.wait(lock, [this] {
-            return ((mAvailableFrames >= mFramesPerBuffer) || mError);
-        });
-
-        if (mError) {
-            memset(buffer, 0, mFramesPerBuffer * sizeof(int16_t));
-            return 0;
-        }
-
-        size_t firstPart = std::min((size_t) mFramesPerBuffer, mAudioBuffer.size() - mReadPos);
-        memcpy(buffer, mAudioBuffer.data() + mReadPos, firstPart * sizeof(int16_t));
-
-        if (firstPart < (size_t) mFramesPerBuffer) {
-            memcpy((int16_t *) buffer + firstPart, mAudioBuffer.data(),
-                   (mFramesPerBuffer - firstPart) * sizeof(int16_t));
-        }
-
-        mReadPos = (mReadPos + mFramesPerBuffer) % mAudioBuffer.size();
-        mAvailableFrames -= mFramesPerBuffer;
-
-        if (!(logCounter++ % 5000))
-            myLog("MIC: FramesPerBurst: %d, XRunCount: %d, "
-                  "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
-                  mStream->getFramesPerBurst(),
-                  mStream->getXRunCount().value(),
-                  mStream->getBufferCapacityInFrames(), mStream->getBufferSizeInFrames()
-            );
-
-        return static_cast<long>(mAudioBuffer.size());
-    }
 
 private:
     void createStream(int id) {
         oboe::AudioStreamBuilder builder;
-        builder.setDirection(oboe::Direction::Input)
-                ->setDeviceId(id)
+
+        builder.setAudioApi(AudioApi::AAudio)
+                ->setUsage(oboe::Usage::Game)
                 ->setInputPreset(oboe::InputPreset::Unprocessed)
-                ->setSampleRate(mSampleRate)
-                ->setChannelCount(oboe::ChannelCount::Mono)
-                ->setFormat(oboe::AudioFormat::I16)
+                ->setDeviceId(id)
+                ->setDirection(oboe::Direction::Input)
                 ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-                ->setFramesPerCallback(mFramesPerBuffer)
+                ->setSharingMode(oboe::SharingMode::Exclusive)
+                ->setFormat(oboe::AudioFormat::I16)
+                ->setChannelCount(1)
+                ->setBufferCapacityInFrames(mFramesPerBuffer * 2)
+                ->setSampleRate(mSampleRate)
+                ->setFramesPerDataCallback(mFramesPerBuffer)
                 ->setCallback(this);
 
         oboe::Result result = builder.openStream(mStream);
@@ -326,35 +319,56 @@ private:
             oboe::AudioStream *stream,
             void *audioData,
             int32_t numFrames) override {
-        std::lock_guard<std::mutex> lock(mMutex);
 
-        if ((mAudioBuffer.size() - mAvailableFrames) < (size_t) numFrames) {
-            mAudioBuffer.resize(mAudioBuffer.size() + mFramesPerBuffer * 4);
-            LOGE("Buffer overflow. New size: %zu", mAudioBuffer.size());
+        auto env = vm.getEnv();
+        env->SetByteArrayRegion(result, 0, mFramesPerBuffer * 2, (jbyte *) audioData);
+        cb->run(result);
+
+        if (!(logCounter++ % 1000)) {
+            myLog("MIC: FramesPerBurst: %d, XRunCount: %d, "
+                  "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
+                  mStream->getFramesPerBurst(),
+                  mStream->getXRunCount().value(),
+                  mStream->getBufferCapacityInFrames(), mStream->getBufferSizeInFrames()
+            );
         }
 
-        size_t writePos = (mReadPos + mAvailableFrames) % mAudioBuffer.size();
-        size_t firstPart = std::min((size_t) numFrames, mAudioBuffer.size() - writePos);
-
-        memcpy(mAudioBuffer.data() + writePos, audioData, firstPart * sizeof(int16_t));
-        if (firstPart < (size_t) numFrames) {
-            memcpy(mAudioBuffer.data(), (int16_t *) audioData + firstPart,
-                   (numFrames - firstPart) * sizeof(int16_t));
-        }
-
-        mAvailableFrames += numFrames;
-        mCondition.notify_one();
         return oboe::DataCallbackResult::Continue;
     }
 
+    struct CaptureCallback {
+
+        CaptureCallback(SafeJavaVM &vm, jobject jcb) : o(vm, jcb) {
+            MY_DBG();
+        }
+
+        void run(jbyteArray data) {
+            MY_DBG();
+            return o.call<MI::run>(data);
+        }
+
+    private:
+        enum class MI {
+            run
+        };
+
+        JavaObject<MI,
+                MethodDescription{
+                        MI::run,
+                        ReturnType<void>{},
+                        "run",
+                        "([B)V"
+                }> o;
+    };
+
+
+    SafeJavaVM &vm;
+
     int mSampleRate;
     int mFramesPerBuffer;
+    jbyteArray result;
     std::shared_ptr<oboe::AudioStream> mStream;
-    std::vector<int16_t> mAudioBuffer;
-    std::mutex mMutex;
-    std::condition_variable mCondition;
-    size_t mReadPos = 0;
-    size_t mAvailableFrames = 0;
+    std::unique_ptr<CaptureCallback> cb;
     bool mError = false;
 };
 
@@ -366,7 +380,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeCreateRecorder(
         jint framesPerBuffer,
         jint id) {
     MY_DBG();
-    return reinterpret_cast<jlong>(new BlockingRecorder(sampleRate, framesPerBuffer, id));
+    return reinterpret_cast<jlong>(new BlockingRecorder(glob->vm, sampleRate, framesPerBuffer, id));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -383,10 +397,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStartRecording(
         JNIEnv *env,
         jobject /* this */,
-        jlong handle) {
+        jlong handle, jobject jcb) {
     MY_DBG();
     auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
-    recorder->start();
+    recorder->start(jcb);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -397,20 +411,6 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRecording(
     MY_DBG();
     auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
     recorder->stop();
-}
-
-extern "C" JNIEXPORT jlong JNICALL
-Java_tech_fastsense_common_native_1audio_JniWrapper_oboeRead(
-        JNIEnv *env,
-        jobject /* this */,
-        jlong handle,
-        jbyteArray buffer) {
-//    MY_DBG();
-    auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
-    jbyte *bufferPtr = env->GetByteArrayElements(buffer, nullptr);
-    auto size = recorder->read(bufferPtr);
-    env->ReleaseByteArrayElements(buffer, bufferPtr, 0);
-    return size;
 }
 
 class BlockingAudioRenderer : public oboe::AudioStreamCallback {
@@ -429,6 +429,7 @@ public:
     bool initialize() {
         oboe::AudioStreamBuilder builder;
         builder.setAudioApi(AudioApi::AAudio)
+                ->setUsage(oboe::Usage::Game)
                 ->setDirection(oboe::Direction::Output)
                 ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
                 ->setSharingMode(oboe::SharingMode::Exclusive)
@@ -436,10 +437,10 @@ public:
                 ->setChannelCount(1)
                 ->setBufferCapacityInFrames(framesPerBuffer_ * 2)
                 ->setSampleRate(sampleRate_)
-                ->setFramesPerCallback(framesPerBuffer_)
+                ->setFramesPerDataCallback(framesPerBuffer_)
                 ->setCallback(this);
 
-        oboe::Result result = builder.openStream(stream_);
+        auto result = builder.openStream(stream_);
         return result == oboe::Result::OK && stream_ != nullptr;
     }
 
@@ -486,7 +487,8 @@ public:
             void *audioData,
             int32_t numFrames) override {
         auto env = vm.getEnv();
-        auto jsa = cb->run();
+        auto underrunCount = stream_->getXRunCount().value();
+        auto jsa = cb->run(underrunCount);
         jshort *elements = env->GetShortArrayElements(jsa, nullptr);
         jsize length = env->GetArrayLength(jsa);
         if (elements && length > 0) {
@@ -524,9 +526,9 @@ private:
             MY_DBG();
         }
 
-        jshortArray run() {
+        jshortArray run(int underrunCount) {
             MY_DBG();
-            return reinterpret_cast<jshortArray>(o.call<MI::run>());
+            return reinterpret_cast<jshortArray>(o.call<MI::run>(underrunCount));
         }
 
     private:
@@ -540,7 +542,7 @@ private:
                         MI::run,
                         ReturnType<jobject>{},
                         "run",
-                        "()[S"
+                        "(I)[S"
                 }> o;
     };
 

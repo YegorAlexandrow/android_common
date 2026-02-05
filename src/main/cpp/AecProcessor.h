@@ -64,24 +64,21 @@ public:
                 output_config_.sample_rate_hz(), 1);
     }
 
-    void processFrame(const int16_t *render_frame, const int16_t *capture_frame,
-                      int16_t *output_frame, bool aec_enabled, bool agc_enabled) {
+
+    void processCapture(const int16_t *capture_frame, int16_t *output_frame) {
         capture_audio_->CopyFrom(capture_frame, input_config_);
-        if (aec_enabled) { // todo SetCaptureOutputUsage
-            render_audio_->CopyFrom(render_frame, reference_config_);
-            render_audio_->SplitIntoFrequencyBands();
-            echo_control_->AnalyzeRender(render_audio_.get());
-//          render_audio_->MergeFrequencyBands();  not used below
-            capture_audio_->SplitIntoFrequencyBands();
-            hp_filter_->Process(capture_audio_.get(), true);
-            echo_control_->AnalyzeCapture(capture_audio_.get());
-            echo_control_->ProcessCapture(capture_audio_.get(), false);
-            capture_audio_->MergeFrequencyBands();
-        }
-        if (agc_enabled) {
-            gain_controller2->Process(capture_audio_.get());
-        }
+        capture_audio_->SplitIntoFrequencyBands();
+        hp_filter_->Process(capture_audio_.get(), true);
+        echo_control_->AnalyzeCapture(capture_audio_.get());
+        echo_control_->ProcessCapture(capture_audio_.get(), false);
+        capture_audio_->MergeFrequencyBands();
         capture_audio_->CopyTo(output_config_, output_frame);
+    }
+
+    void processRender(const int16_t *render_frame) {
+        render_audio_->CopyFrom(render_frame, reference_config_);
+        render_audio_->SplitIntoFrequencyBands();
+        echo_control_->AnalyzeRender(render_audio_.get());
     }
 
     int getDelay() {

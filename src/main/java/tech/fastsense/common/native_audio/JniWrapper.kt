@@ -13,7 +13,11 @@ class JniWrapper {
     }
 
     interface RenderCallback {
-        fun run(): ShortArray
+        fun run(underrunCount: Int): ShortArray
+    }
+
+    interface CaptureCallback {
+        fun run(data: ByteArray)
     }
 
     external fun setupTest(assets: AssetManager, cb: NativeSpeakerTest.JniCallback, name: String)
@@ -36,29 +40,27 @@ class JniWrapper {
     ): Long
 
     external fun destroyAec(handle: Long)
-    external fun aecProcessFrame(
+    external fun aecProcessCapture(
         handle: Long,
-        renderFrame: ShortArray,
         captureFrame: ShortArray,
         additionalGain: Float = -1f, // applies only if >0f
-        aecEnabled: Boolean,
-        agcEnabled: Boolean,
     ): ShortArray?
+
+    external fun aecProcessRender(
+        handle: Long,
+        renderFrame: ShortArray,
+    )
 
     external fun aecGetDelay(handle: Long): Int
 
     external fun oboeCreateRecorder(sampleRate: Int, framesPerBuffer: Int, id: Int): Long
     external fun oboeDestroyRecorder(handle: Long)
-    external fun oboeStartRecording(handle: Long)
+    external fun oboeStartRecording(handle: Long, captureCallback: CaptureCallback)
     external fun oboeStopRecording(handle: Long)
-    external fun oboeRead(handle: Long, buffer: ByteArray): Long
 
     external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
     external fun oboeDestroyRenderer(handle: Long)
-    external fun oboeStartRendering(
-        handle: Long,
-        renderCallback: RenderCallback
-    )
+    external fun oboeStartRendering(handle: Long, renderCallback: RenderCallback)
     external fun oboeStopRendering(handle: Long)
 
     external fun oboeIsPlaying(handle: Long): Boolean
