@@ -186,27 +186,39 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
     MY_DBG();
     delete reinterpret_cast<AECProcessor *>(handle);
 }
+
 namespace sc = std::chrono;
 using schrc = sc::high_resolution_clock;
 size_t renderLogCounter = 0;
-sc::duration<double, std::milli> renderElapsedMax{};
+sc::duration<double, std::milli> renderElapsedMax[4]{};
+
+size_t captureLogCounter = 0;
+sc::duration<double, std::milli> captureElapsedMax[7]{};
 
 extern "C" JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessRender(JNIEnv *env, jobject thiz,
                                                                      jlong handle,
                                                                      jshortArray render_frame) {
 //    MY_DBG();
-
-
-    auto start = schrc::now();
+    auto ts0 = schrc::now();
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
     auto render = env->GetShortArrayElements(render_frame, nullptr);
+    auto ts1 = schrc::now();
     processor->processRender(render);
+    auto ts2 = schrc::now();
     env->ReleaseShortArrayElements(render_frame, render, JNI_ABORT);
-    sc::duration<double, std::milli> elapsed = schrc::now() - start;
-    if (elapsed > renderElapsedMax) renderElapsedMax = elapsed;
+    auto ts3 = schrc::now();
+    sc::duration<double, std::milli> elapsed[4]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts3 - ts0};
+    for (int i = 0; i < 4; ++i)
+        if (elapsed[i] > renderElapsedMax[i])
+            renderElapsedMax[i] = elapsed[i];
     if (!(renderLogCounter++ % 1000))
-        myLog("aecProcessRender duration/max: %f/%f", elapsed.count(), renderElapsedMax.count());
+        myLog("aecProcessRender duration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n3-0: %f/%f",
+              elapsed[0].count(), renderElapsedMax[0].count(),
+              elapsed[1].count(), renderElapsedMax[1].count(),
+              elapsed[2].count(), renderElapsedMax[2].count(),
+              elapsed[3].count(), renderElapsedMax[3].count()
+        );
 }
 
 extern "C" JNIEXPORT jshortArray JNICALL
@@ -215,15 +227,15 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *en
                                                                       jshortArray capture_frame,
                                                                       jfloat additional_gain) {
 //    MY_DBG();
-
+    auto ts0 = schrc::now();
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
     auto output_frame_size = processor->output_frame_size_;
-
+    auto ts1 = schrc::now();
     auto capture = env->GetShortArrayElements(capture_frame, nullptr);
     std::vector<int16_t> output(output_frame_size);
-
+    auto ts2 = schrc::now();
     processor->processCapture(capture, output.data());
-
+    auto ts3 = schrc::now();
     if (additional_gain > 0) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
         for (int i = 0; i < output_frame_size; i++) {
@@ -234,12 +246,29 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *en
             );
         }
     }
-
+    auto ts4 = schrc::now();
     auto result = env->NewShortArray(output_frame_size);
     env->SetShortArrayRegion(result, 0, output_frame_size,
                              reinterpret_cast<const jshort *>(output.data()));
-
+    auto ts5 = schrc::now();
     env->ReleaseShortArrayElements(capture_frame, capture, JNI_ABORT);
+    auto ts6 = schrc::now();
+    sc::duration<double, std::milli> elapsed[7]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts4 - ts3,
+                                                ts5 - ts4, ts6 - ts5, ts6 - ts0};
+    for (int i = 0; i < 7; ++i)
+        if (elapsed[i] > captureElapsedMax[i])
+            captureElapsedMax[i] = elapsed[i];
+    if (!(captureLogCounter++ % 1000))
+        myLog("aecProcessCapture duration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n6-0: %f/%f",
+              elapsed[0].count(), captureElapsedMax[0].count(),
+              elapsed[1].count(), captureElapsedMax[1].count(),
+              elapsed[2].count(), captureElapsedMax[2].count(),
+              elapsed[3].count(), captureElapsedMax[3].count(),
+              elapsed[4].count(), captureElapsedMax[4].count(),
+              elapsed[5].count(), captureElapsedMax[5].count(),
+              elapsed[6].count(), captureElapsedMax[6].count()
+        );
+
     return result;
 }
 
