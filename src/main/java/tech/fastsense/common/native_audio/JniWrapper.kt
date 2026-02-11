@@ -46,11 +46,6 @@ class JniWrapper {
         additionalGain: Float = -1f, // applies only if >0f
     ): ShortArray?
 
-    external fun aecProcessRender(
-        handle: Long,
-        renderFrame: ShortArray,
-    )
-
     external fun aecGetDelay(handle: Long): Int
 
     external fun oboeCreateRecorder(sampleRate: Int, framesPerBuffer: Int, id: Int): Long
@@ -60,7 +55,7 @@ class JniWrapper {
 
     external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
     external fun oboeDestroyRenderer(handle: Long)
-    external fun oboeStartRendering(handle: Long, renderCallback: RenderCallback)
+    external fun oboeStartRendering(handle: Long,aecHandle: Long, renderCallback: RenderCallback)
     external fun oboeStopRendering(handle: Long)
 
     external fun oboeIsPlaying(handle: Long): Boolean
