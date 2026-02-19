@@ -55,7 +55,7 @@ class JniWrapper {
 
     external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
     external fun oboeDestroyRenderer(handle: Long)
-    external fun oboeStartRendering(handle: Long,aecHandle: Long, renderCallback: RenderCallback)
+    external fun oboeStartRendering(handle: Long, aecHandle: Long, renderCallback: RenderCallback)
     external fun oboeStopRendering(handle: Long)
 
     external fun oboeIsPlaying(handle: Long): Boolean
@@ -67,4 +67,8 @@ class JniWrapper {
         dbGain: Double
     )
 
+    external fun pushRenderBuffer(handle: Long): Boolean
+    external fun popReferenceBuffer(handle: Long): Boolean
+    external fun getRenderBuffer(handle: Long): ByteBuffer
+    external fun getReferenceBuffer(handle: Long): ByteBuffer
 }

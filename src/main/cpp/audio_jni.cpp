@@ -16,6 +16,7 @@
 #include <chrono>
 #include <mutex>
 #include <condition_variable>
+#include "utils/temp.h"
 
 std::string vectorToString(const std::vector<int16_t> &vec) {
     std::stringstream ss;
@@ -418,9 +419,7 @@ class BlockingAudioRenderer : public oboe::AudioStreamCallback {
 public:
     BlockingAudioRenderer(SafeJavaVM &vm_, int32_t sampleRate, int32_t framesPerBuffer)
             : vm(vm_), sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
-              bufferReady_(false) {
-        currentBuffer_.resize(framesPerBuffer);
-    }
+              renderMirrorBuffer(vm_), referenceMirrorBuffer(vm_) {}
 
     ~BlockingAudioRenderer() {
         stop();
@@ -466,19 +465,20 @@ public:
         }
     }
 
+    bool pushRenderBuffer() {
+//        if (!stream_) return; we need to have ability to pre-feed render with eg aec warmup frames
+        myLog("pushRenderBuffer %d", renderMirrorBuffer.data->meta.traceId);
 
-    void write(const int16_t *data, int32_t numFrames) {
-        if (!stream_) return;
-
-        std::unique_lock<std::mutex> lock(mutex_);
-        condVar_.wait(lock, [this] { return !bufferReady_; });
-        std::copy(data, data + numFrames, currentBuffer_.begin());
-        bufferReady_ = true;
-        lock.unlock();
-        condVar_.notify_one();
-
-
+        return renderQueue.push(*renderMirrorBuffer.data);
     }
+
+    bool popReferenceBuffer() {
+        return referenceQueue.pop(*referenceMirrorBuffer.data);
+    }
+
+    jobject getRenderBuffer() { return *renderMirrorBuffer.o; }
+
+    jobject getReferenceBuffer() { return *referenceMirrorBuffer.o; }
 
     bool isPlaying() const {
         return stream_ && stream_->getState() == oboe::StreamState::Started;
@@ -488,29 +488,27 @@ public:
             oboe::AudioStream *audioStream,
             void *audioData,
             int32_t numFrames) override {
-        auto ts0 = schrc::now();
-        auto env = vm.getEnv();
-        auto underrunCount = stream_->getXRunCount().value();
-        auto ts1 = schrc::now();
-        auto jsa = cb->run(underrunCount);
-        auto ts2 = schrc::now();
-        auto output = static_cast<int16_t *>(audioData);
-        auto underrunSamples = underrunCount * 192 - underrunCountHandled * RENDER_CHUNK;
-        if (underrunSamples >= RENDER_CHUNK) {
-            sendAecReference(const_cast<int16_t *>(silentFrame));
+        const auto ts0 = schrc::now();
+        auto renderData = silentAudioRenderData;
+        auto output = static_cast<decltype(renderData.frame) *>(audioData);
+        const auto ts1 = schrc::now();
+        const auto underrunCount = stream_->getXRunCount().value();
+        const auto ts2 = schrc::now();
+        while (underrunCount - underrunCountHandled > 0) {
+            referenceQueue.push(underrunAudioRenderData);
             underrunCountHandled++;
-            myLog("underrun compensation: %d. %d samples left", underrunCountHandled,
-                  underrunSamples - RENDER_CHUNK);
         }
-        auto ts3 = schrc::now();
-        uint8_t isCopy;
-        auto elements = static_cast<jshort *>(env->GetPrimitiveArrayCritical(jsa, &isCopy));
-        std::copy(elements, elements + RENDER_CHUNK, output);
-        auto ts4 = schrc::now();
-        env->ReleasePrimitiveArrayCritical(jsa, elements, JNI_ABORT);
-        auto ts5 = schrc::now();
-        sendAecReference(output);
-        auto ts6 = schrc::now();
+        const auto ts3 = schrc::now();
+
+        [[maybe_unused]] const auto res = renderQueue.dropWhilePop(
+                renderData, [&](const AudioRenderDataHw &data) {
+                    return data.meta.traceId <= traceIdToDrop.load();
+                });
+        const auto ts4 = schrc::now();
+        *output = renderData.frame;
+        const auto ts5 = schrc::now();
+        referenceQueue.push(renderData);
+        const auto ts6 = schrc::now();
         sc::duration<double, std::milli> elapsed[7]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts4 - ts3,
                                                     ts5 - ts4, ts6 - ts5, ts6 - ts0};
 
@@ -520,7 +518,7 @@ public:
 
         if (logCounter++ % 1000 == 0) {
             myLog("XRunCount: %d\nduration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n6-0: %f/%f",
-                  stream_->getXRunCount().value(),
+                  underrunCount,
                   elapsed[0].count(), renderElapsedMax[0].count(),
                   elapsed[1].count(), renderElapsedMax[1].count(),
                   elapsed[2].count(), renderElapsedMax[2].count(),
@@ -541,6 +539,12 @@ public:
                 stream_->requestStart();
             }
         }
+    }
+
+    static BlockingAudioRenderer *fromHandle(jlong handle) {
+        auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
+        if (!renderer) throw std::runtime_error("Cannot get audio renderer from handle");
+        return renderer;
     }
 
 private:
@@ -577,25 +581,24 @@ private:
 
     SafeJavaVM &vm;
     jlong aecHandle;
-    int underrunCountHandled = 0;
+    int32_t underrunCountHandled = 0;
     sc::duration<double, std::milli> renderElapsedMax[7]{};
 
-
     std::unique_ptr<RenderCallback> cb;
-
     std::shared_ptr<oboe::AudioStream> stream_;
+
     int32_t sampleRate_;
     int32_t framesPerBuffer_;
 
-
-    std::vector<int16_t> currentBuffer_;
-    std::mutex mutex_;
-    std::condition_variable condVar_;
     size_t logCounter = 0;
-    bool bufferReady_;
 
-    constexpr static auto RENDER_CHUNK = 240;
-    constexpr static int16_t silentFrame[RENDER_CHUNK]{};
+    AudioRenderDataMirrorBufferHw renderMirrorBuffer;
+    AtomicQueue<AudioRenderDataHw, 8192> renderQueue;
+
+    AudioRenderDataMirrorBufferHw referenceMirrorBuffer;
+    AtomicQueue<AudioRenderDataHw, 256> referenceQueue;
+
+    std::atomic<int32_t> traceIdToDrop{INIT_ID};
 };
 
 // JNI Functions implementation
@@ -696,4 +699,28 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_runSpectro(JNIEnv *env, jobj
     // Release arrays
     env->ReleaseShortArrayElements(shorts, input_data, JNI_ABORT);
     env->ReleaseFloatArrayElements(magnitudes, output_data, 0);
+}
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_pushRenderBuffer(JNIEnv *env, jobject thiz,
+                                                                     jlong handle) {
+    return BlockingAudioRenderer::fromHandle(handle)->pushRenderBuffer();
+}
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_popReferenceBuffer(JNIEnv *env, jobject thiz,
+                                                                       jlong handle) {
+    return BlockingAudioRenderer::fromHandle(handle)->popReferenceBuffer();
+}
+extern "C"
+JNIEXPORT jobject JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_getRenderBuffer(JNIEnv *env, jobject thiz,
+                                                                    jlong handle) {
+    return BlockingAudioRenderer::fromHandle(handle)->getRenderBuffer();
+}
+extern "C"
+JNIEXPORT jobject JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_getReferenceBuffer(JNIEnv *env, jobject thiz,
+                                                                       jlong handle) {
+    return BlockingAudioRenderer::fromHandle(handle)->getReferenceBuffer();
 }

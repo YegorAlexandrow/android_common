@@ -13,6 +13,20 @@ public:
             "Capacity must be a power of 2"
     );
 
+    template<class Dropper>
+    bool dropWhilePop(T &val, const Dropper &dropper) {
+        while (!isEmpty() && dropper(std::as_const(buffer[mask(readCounter)]))) {
+            ++readCounter;
+        }
+        if (isEmpty() or dropper(std::as_const(buffer[mask(readCounter)]))) {
+            return false;
+        } else {
+            val = buffer[mask(readCounter)];
+            ++readCounter;
+            return true;
+        }
+    }
+
     void reset() {
         writeCounter = 0;
         readCounter = 0;
@@ -34,15 +48,6 @@ public:
         } else {
             buffer[mask(writeCounter)] = item;
             ++writeCounter;
-            return true;
-        }
-    }
-
-    bool peek(T &item) const {
-        if (isEmpty()) {
-            return false;
-        } else {
-            item = buffer[mask(readCounter)];
             return true;
         }
     }
