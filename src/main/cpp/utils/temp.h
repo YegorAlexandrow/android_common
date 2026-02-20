@@ -6,18 +6,22 @@
 #include "SafeJavaVM.h"
 #include "JavaObject.h"
 
+constexpr inline int32_t FILE_ID = INT32_MAX;
 constexpr inline int32_t SILENT_ID = -1;
-constexpr inline int32_t FILE_ID = -2;
-constexpr inline int32_t UNDERRUN_ID = -3;
-constexpr inline int32_t INIT_ID = -4;
+constexpr inline int32_t UNDERRUN_ID = -2;
+constexpr inline int32_t INIT_ID = -3;
 
-constexpr inline size_t RENDER_FRAME_SAMPLES_HW = 192;
-
+constexpr inline size_t RENDER_FRAME_SAMPLES_AEC = 240;
+constexpr inline size_t CAPTURE_FRAME_SAMPLES_AEC = 320;
+constexpr inline size_t OUT_FRAME_SAMPLES_AEC = 160;
+constexpr inline size_t RENDER_FRAME_SAMPLES_HW = RENDER_FRAME_SAMPLES_AEC * 8 / 10;
+constexpr inline size_t CAPTURE_FRAME_SAMPLES_HW = CAPTURE_FRAME_SAMPLES_AEC * 8 / 10;
+constexpr inline size_t OUT_FRAME_SAMPLES_HW = OUT_FRAME_SAMPLES_AEC * 8 / 10;
 
 struct AudioRenderMeta {
     int32_t traceId = INIT_ID;
-    int32_t  spkId = INIT_ID;
-    int32_t  sliceId = INIT_ID;
+    int32_t spkId = INIT_ID;
+    int32_t sliceId = INIT_ID;
 };
 
 template<size_t frameSizeSamples>
@@ -25,6 +29,12 @@ struct AudioRenderData {
     std::array<int16_t, frameSizeSamples> frame{};
     AudioRenderMeta meta{};
 };
+
+template<size_t frameSizeSamples>
+struct AudioCaptureData {
+    std::array<int16_t, frameSizeSamples> frame{};
+};
+
 template<class T>
 struct MirrorBuffer {
 
@@ -51,8 +61,10 @@ struct MirrorBuffer {
 
 
 using AudioRenderDataHw = AudioRenderData<RENDER_FRAME_SAMPLES_HW>;
+using AudioCaptureDataHw = AudioCaptureData<CAPTURE_FRAME_SAMPLES_HW>;
 
 using AudioRenderDataMirrorBufferHw = MirrorBuffer<AudioRenderDataHw>;
+using AudioCaptureDataMirrorBufferHw = MirrorBuffer<AudioCaptureDataHw>;
 
 constexpr inline AudioRenderDataHw silentAudioRenderData{
         {}, AudioRenderMeta{SILENT_ID, SILENT_ID, SILENT_ID}

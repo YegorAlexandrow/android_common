@@ -191,8 +191,20 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_destroyAec(JNIEnv *env, jobj
 namespace sc = std::chrono;
 using schrc = sc::high_resolution_clock;
 
+extern "C"
+JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessRender(JNIEnv *env, jobject thiz,
+                                                                     jlong handle,
+                                                                     jshortArray render_frame) {
+    auto *render = static_cast<jshort *>(env->GetPrimitiveArrayCritical(render_frame, nullptr));
+    auto processor = reinterpret_cast<AECProcessor *>(handle);
+    processor->processRender(render);
+    env->ReleasePrimitiveArrayCritical(render_frame, render, JNI_ABORT);
+}
+
 size_t captureLogCounter = 0;
 sc::duration<double, std::milli> captureElapsedMax[7]{};
+
 
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *env, jobject thiz,
@@ -202,16 +214,15 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *en
 //    MY_DBG();
     auto ts0 = schrc::now();
     auto *processor = reinterpret_cast<AECProcessor *>(handle);
-    auto output_frame_size = processor->output_frame_size_;
     auto ts1 = schrc::now();
     auto *capture = static_cast<jshort *>(env->GetPrimitiveArrayCritical(capture_frame, nullptr));
-    std::vector<int16_t> output(output_frame_size);
+    std::vector<int16_t> output(OUT_FRAME_SAMPLES_HW);
     auto ts2 = schrc::now();
     processor->processCapture(capture, output.data());
     auto ts3 = schrc::now();
     if (additional_gain > 0) {
         float linear_gain = std::pow(10.0f, additional_gain / 20.0f);
-        for (int i = 0; i < output_frame_size; i++) {
+        for (size_t i = 0; i < OUT_FRAME_SAMPLES_HW; i++) {
             float sample = static_cast<float>(output[i]) * linear_gain;
             output[i] = static_cast<int16_t>(
                     sample > INT16_MAX ? INT16_MAX :
@@ -220,8 +231,8 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *en
         }
     }
     auto ts4 = schrc::now();
-    auto result = env->NewShortArray(output_frame_size);
-    env->SetShortArrayRegion(result, 0, output_frame_size,
+    auto result = env->NewShortArray(OUT_FRAME_SAMPLES_HW);
+    env->SetShortArrayRegion(result, 0, OUT_FRAME_SAMPLES_HW,
                              reinterpret_cast<const jshort *>(output.data()));
     auto ts5 = schrc::now();
     env->ReleasePrimitiveArrayCritical(capture_frame, capture, JNI_ABORT);
@@ -259,19 +270,17 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecGetDelay(JNIEnv *env, job
 class BlockingRecorder : public AudioStreamCallback {
 public:
     BlockingRecorder(SafeJavaVM &vm_, int sampleRate, int framesPerBuffer, int id)
-            : vm(vm_), mSampleRate(sampleRate), mFramesPerBuffer(framesPerBuffer) {
+            : mSampleRate(sampleRate), mFramesPerBuffer(framesPerBuffer),
+              captureMirrorBuffer(vm_) {
         createStream(id);
-        auto env = vm.getEnv();
-        result = (jbyteArray) env->NewGlobalRef(env->NewByteArray(mFramesPerBuffer * 2));
     }
 
     ~BlockingRecorder() {
         closeStream();
     }
 
-    void start(jobject jcb) {
+    void start() {
         if (mStream) {
-            cb = std::make_unique<CaptureCallback>(vm, jcb);
             mStream->requestStart();
         }
     }
@@ -282,10 +291,23 @@ public:
         }
     }
 
+    bool blockingPopCaptureBuffer() {
+        frameReady.wait(false);
+        return captureQueue.pop(*captureMirrorBuffer.data);
+    }
+
+    jobject getCaptureBuffer() { return *captureMirrorBuffer.o; }
+
     size_t logCounter = 0;
 
+    static BlockingRecorder *fromHandle(jlong handle) {
+        auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
+        if (!recorder) throw std::runtime_error("Cannot get audio recorder from handle");
+        return recorder;
+    }
 
 private:
+
     void createStream(int id) {
         oboe::AudioStreamBuilder builder;
 
@@ -322,10 +344,6 @@ private:
             void *audioData,
             int32_t numFrames) override {
 
-        auto env = vm.getEnv();
-        env->SetByteArrayRegion(result, 0, mFramesPerBuffer * 2, (jbyte *) audioData);
-        cb->run(result);
-
         if (!(logCounter++ % 1000)) {
             myLog("MIC: FramesPerBurst: %d, XRunCount: %d, "
                   "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
@@ -334,44 +352,21 @@ private:
                   mStream->getBufferCapacityInFrames(), mStream->getBufferSizeInFrames()
             );
         }
+        captureQueue.push(*static_cast<AudioCaptureDataHw *>(audioData));
 
+        frameReady = true;
+        frameReady.notify_one();
         return oboe::DataCallbackResult::Continue;
     }
 
-    struct CaptureCallback {
-
-        CaptureCallback(SafeJavaVM &vm, jobject jcb) : o(vm, jcb) {
-            MY_DBG();
-        }
-
-        void run(jbyteArray data) {
-            MY_DBG();
-            return o.call<MI::run>(data);
-        }
-
-    private:
-        enum class MI {
-            run
-        };
-
-        JavaObject<MI,
-                MethodDescription{
-                        MI::run,
-                        ReturnType<void>{},
-                        "run",
-                        "([B)V"
-                }> o;
-    };
-
-
-    SafeJavaVM &vm;
-
     int mSampleRate;
     int mFramesPerBuffer;
-    jbyteArray result;
     std::shared_ptr<oboe::AudioStream> mStream;
-    std::unique_ptr<CaptureCallback> cb;
     bool mError = false;
+    std::atomic<bool> frameReady{false};
+
+    AudioCaptureDataMirrorBufferHw captureMirrorBuffer;
+    AtomicQueue<AudioCaptureDataHw, 256> captureQueue;
 };
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -399,10 +394,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStartRecording(
         JNIEnv *env,
         jobject /* this */,
-        jlong handle, jobject jcb) {
+        jlong handle) {
     MY_DBG();
     auto recorder = reinterpret_cast<BlockingRecorder *>(handle);
-    recorder->start(jcb);
+    recorder->start();
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -418,7 +413,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRecording(
 class BlockingAudioRenderer : public oboe::AudioStreamCallback {
 public:
     BlockingAudioRenderer(SafeJavaVM &vm_, int32_t sampleRate, int32_t framesPerBuffer)
-            : vm(vm_), sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
+            : sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
               renderMirrorBuffer(vm_), referenceMirrorBuffer(vm_) {}
 
     ~BlockingAudioRenderer() {
@@ -444,10 +439,8 @@ public:
         return result == oboe::Result::OK && stream_ != nullptr;
     }
 
-    void start(jobject jcb, jlong handle) {
+    void start() {
         if (stream_) {
-            aecHandle = handle;
-            cb = std::make_unique<RenderCallback>(vm, jcb);
             stream_->requestStart();
         }
     }
@@ -467,8 +460,6 @@ public:
 
     bool pushRenderBuffer() {
 //        if (!stream_) return; we need to have ability to pre-feed render with eg aec warmup frames
-        myLog("pushRenderBuffer %d", renderMirrorBuffer.data->meta.traceId);
-
         return renderQueue.push(*renderMirrorBuffer.data);
     }
 
@@ -548,43 +539,9 @@ public:
     }
 
 private:
-    void sendAecReference(int16_t *frame) const {
-        auto processor = reinterpret_cast<AECProcessor *>(aecHandle);
-        processor->processRender(frame);
-    }
-
-    struct RenderCallback {
-
-        RenderCallback(SafeJavaVM &vm, jobject jcb) : vm(vm), o(vm, jcb) {
-            MY_DBG();
-        }
-
-        jshortArray run(int underrunCount) {
-            MY_DBG();
-            return reinterpret_cast<jshortArray>(o.call<MI::run>(underrunCount));
-        }
-
-    private:
-        enum class MI {
-            run
-        };
-        SafeJavaVM &vm;
-
-        JavaObject<MI,
-                MethodDescription{
-                        MI::run,
-                        ReturnType<jobject>{},
-                        "run",
-                        "(I)[S"
-                }> o;
-    };
-
-    SafeJavaVM &vm;
-    jlong aecHandle;
     int32_t underrunCountHandled = 0;
     sc::duration<double, std::milli> renderElapsedMax[7]{};
 
-    std::unique_ptr<RenderCallback> cb;
     std::shared_ptr<oboe::AudioStream> stream_;
 
     int32_t sampleRate_;
@@ -624,12 +581,10 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeDestroyRenderer(JNIEnv *
 
 extern "C" JNIEXPORT void JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStartRendering(JNIEnv *env, jobject thiz,
-                                                                       jlong handle,
-                                                                       jlong aecHandle,
-                                                                       jobject jcb) {
+                                                                       jlong handle) {
     MY_DBG();
     auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
-    if (renderer) renderer->start(jcb, aecHandle);
+    if (renderer) renderer->start();
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -723,4 +678,18 @@ JNIEXPORT jobject JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_getReferenceBuffer(JNIEnv *env, jobject thiz,
                                                                        jlong handle) {
     return BlockingAudioRenderer::fromHandle(handle)->getReferenceBuffer();
+}
+extern "C"
+JNIEXPORT jobject JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_getCaptureBuffer(JNIEnv *env, jobject thiz,
+                                                                     jlong handle) {
+    return BlockingRecorder::fromHandle(handle)->getCaptureBuffer();
+
+}
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_blockingPopCaptureBuffer(JNIEnv *env,
+                                                                             jobject thiz,
+                                                                             jlong handle) {
+    return BlockingRecorder::fromHandle(handle)->blockingPopCaptureBuffer();
 }
