@@ -32,26 +32,6 @@ public:
         webrtc::EchoCanceller3Factory aec_factory(aec_config);
 
         echo_control_ = aec_factory.Create(processing_sample_rate_, 1, 1);
-
-        gain_controller2 = std::make_unique<webrtc::GainController2>();
-        using gc_config = webrtc::AudioProcessing::Config::GainController2;
-        gc_config config;
-        config.enabled = true;
-        // fixed gain
-        config.fixed_digital.gain_db = 22.0f; // todo? pass here preferred mic gain?
-        // dynamic gain
-        config.adaptive_digital.enabled = true;
-        config.adaptive_digital.noise_estimator = gc_config::kNoiseFloor;  // for variable noise
-        config.adaptive_digital.vad_reset_period_ms = 1500;                // speech timeout
-        config.adaptive_digital.adjacent_speech_frames_threshold = 12;     // speech detection
-        config.adaptive_digital.max_gain_change_db_per_second = 30.0f;      // smooth transitions
-        config.adaptive_digital.max_output_noise_level_dbfs = -40.0f;      // limits noise boosting
-        auto res = webrtc::GainController2::Validate(config);
-        myLog("agc validate res: %d", res);
-
-        gain_controller2->ApplyConfig(config);
-        gain_controller2->Initialize(processing_sample_rate_);
-
         hp_filter_ = std::make_unique<webrtc::HighPassFilter>(processing_sample_rate_, 1);
 
         render_audio_ = std::make_unique<webrtc::AudioBuffer>(
@@ -67,16 +47,16 @@ public:
 
 
     void processCapture(const int16_t *capture_frame, int16_t *output_frame) {
-        myLog("processCapture: s: %d, e: %d, e-s: %d",
-              inCaptureStart, inCaptureEnd, inCaptureEnd - inCaptureStart);
-        myLog("OUT: s: %d, e: %d, e-s: %d", outStart, outEnd, outEnd - outStart);
+//        myLog("processCapture: s: %d, e: %d, e-s: %d",
+//              inCaptureStart, inCaptureEnd, inCaptureEnd - inCaptureStart);
+//        myLog("OUT: s: %d, e: %d, e-s: %d", outStart, outEnd, outEnd - outStart);
 
         std::copy(capture_frame, capture_frame + CAPTURE_FRAME_SAMPLES_HW,
                   inCaptureBuffer.data() + inCaptureEnd);
         inCaptureEnd += CAPTURE_FRAME_SAMPLES_HW;
         if (inCaptureEnd - inCaptureStart >= CAPTURE_FRAME_SAMPLES_AEC) {
-            myLog("AnalyzeCapture");
-            capture_audio_->CopyFrom(inCaptureBuffer.data(), input_config_);
+//            myLog("AnalyzeCapture");
+            capture_audio_->CopyFrom(inCaptureBuffer.data() + inCaptureStart, input_config_);
             capture_audio_->SplitIntoFrequencyBands();
             hp_filter_->Process(capture_audio_.get(), true);
             echo_control_->AnalyzeCapture(capture_audio_.get());
@@ -90,12 +70,12 @@ public:
                   output_frame);
         outStart += OUT_FRAME_SAMPLES_HW;
         if (inCaptureEnd == inCaptureStart) {
-            myLog("capture loop");
+//            myLog("capture loop");
             inCaptureEnd = 0;
             inCaptureStart = 0;
         }
         if (outEnd == outStart) {
-            myLog("OUT loop");
+//            myLog("OUT loop");
             outEnd = 0;
             outStart = 0;
         }
@@ -149,7 +129,6 @@ private:
             output_config_;
 
     std::unique_ptr<webrtc::EchoControl> echo_control_;
-    std::unique_ptr<webrtc::GainController2> gain_controller2;
     std::unique_ptr<webrtc::HighPassFilter> hp_filter_;
     std::unique_ptr<webrtc::AudioBuffer> render_audio_;
     std::unique_ptr<webrtc::AudioBuffer> capture_audio_;

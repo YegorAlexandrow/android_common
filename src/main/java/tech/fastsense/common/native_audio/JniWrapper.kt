@@ -56,7 +56,16 @@ class JniWrapper {
     external fun oboeStartRecording(handle: Long)
     external fun oboeStopRecording(handle: Long)
 
-    external fun oboeCreateRenderer(sampleRate: Int, framesPerBuffer: Int): Long
+    external fun oboeCreateRenderer(
+        sampleRate: Int,
+        framesPerBuffer: Int,
+        attenuationFactor: Float,
+        smoothing: Float,
+        downSmoothing: Float,
+        threshold: Float,
+        downStartSamples: Int
+    ): Long
+
     external fun oboeDestroyRenderer(handle: Long)
     external fun oboeStartRendering(handle: Long)
     external fun oboeStopRendering(handle: Long)
@@ -70,6 +79,9 @@ class JniWrapper {
         dbGain: Double
     )
 
+    external fun updateVad(handle: Long, vad: Boolean, conf: Float)
+    external fun updateMuted(handle: Long, muted: Boolean)
+    external fun handleDisconnect(handle: Long)
     external fun pushRenderBuffer(handle: Long): Boolean
     external fun popReferenceBuffer(handle: Long): Boolean
     external fun blockingPopCaptureBuffer(handle: Long): Boolean

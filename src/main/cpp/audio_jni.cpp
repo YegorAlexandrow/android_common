@@ -412,9 +412,17 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_oboeStopRecording(
 
 class BlockingAudioRenderer : public oboe::AudioStreamCallback {
 public:
-    BlockingAudioRenderer(SafeJavaVM &vm_, int32_t sampleRate, int32_t framesPerBuffer)
-            : sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
-              renderMirrorBuffer(vm_), referenceMirrorBuffer(vm_) {}
+    BlockingAudioRenderer(SafeJavaVM &vm_, int32_t sampleRate, int32_t framesPerBuffer,
+                          jfloat attenuationFactor,
+                          jfloat smoothing, jfloat downSmoothing, jfloat threshold,
+                          jint downStartSamples)
+            : attenuationFactor(attenuationFactor), smoothing(smoothing),
+              downSmoothing(downSmoothing), threshold(threshold), downStartSamples(downStartSamples),
+              sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
+              renderMirrorBuffer(vm_), referenceMirrorBuffer(vm_) {
+        myLog("attenuationFactor: %f\nsmoothing: %f\ndownSmoothing: %f\nthreshold: %f\ndownStartSamples: %d",
+              attenuationFactor, smoothing, downSmoothing, threshold, downStartSamples);
+    }
 
     ~BlockingAudioRenderer() {
         stop();
@@ -471,6 +479,19 @@ public:
 
     jobject getReferenceBuffer() { return *referenceMirrorBuffer.o; }
 
+    void updateVad(bool _vad, float conf) {
+        vad = _vad;
+        vadConf = conf;
+    }
+
+    void updateMuted(bool _muted) {
+        muted = _muted;
+    }
+
+    void handleDisconnect() {
+        traceIdToDrop = INIT_ID;
+    }
+
     bool isPlaying() const {
         return stream_ && stream_->getState() == oboe::StreamState::Started;
     }
@@ -480,8 +501,8 @@ public:
             void *audioData,
             int32_t numFrames) override {
         const auto ts0 = schrc::now();
-        auto renderData = silentAudioRenderData;
-        auto output = static_cast<decltype(renderData.frame) *>(audioData);
+        auto refData = silentAudioRenderData;
+        auto output = static_cast<decltype(refData.frame) *>(audioData);
         const auto ts1 = schrc::now();
         const auto underrunCount = stream_->getXRunCount().value();
         const auto ts2 = schrc::now();
@@ -492,23 +513,38 @@ public:
         const auto ts3 = schrc::now();
 
         [[maybe_unused]] const auto res = renderQueue.dropWhilePop(
-                renderData, [&](const AudioRenderDataHw &data) {
-                    return data.meta.traceId <= traceIdToDrop.load();
+                refData, [&](const AudioRenderDataHw &data) {
+                    if (vad) {
+                        traceIdToDrop = data.meta.traceId;
+                        refData.interruptInitiator = INTERRUPT_VAD;
+                        refData.traceIdToDrop = traceIdToDrop;
+                    }
+                    if (muted) {
+                        traceIdToDrop = data.meta.traceId;
+                        refData.interruptInitiator = INTERRUPT_MUTE;
+                        refData.traceIdToDrop = traceIdToDrop;
+                    }
+                    return data.meta.traceId <= traceIdToDrop;
                 });
         const auto ts4 = schrc::now();
-        *output = renderData.frame;
+        if (refData.meta.traceId != FILE_ID && refData.meta.traceId >= 0) {
+            applyGain(refData.frame, calcTargetGain());
+            refData.spkGain = currentGain;
+        } else resetGain();
         const auto ts5 = schrc::now();
-        referenceQueue.push(renderData);
+        *output = refData.frame;
         const auto ts6 = schrc::now();
-        sc::duration<double, std::milli> elapsed[7]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts4 - ts3,
-                                                    ts5 - ts4, ts6 - ts5, ts6 - ts0};
+        referenceQueue.push(refData);
+        const auto ts7 = schrc::now();
+        sc::duration<double, std::milli> elapsed[8]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts4 - ts3,
+                                                    ts5 - ts4, ts6 - ts5, ts7 - ts6, ts7 - ts0};
 
-        for (int i = 0; i < 7; ++i)
+        for (int i = 0; i < 8; ++i)
             if (elapsed[i] > renderElapsedMax[i])
                 renderElapsedMax[i] = elapsed[i];
 
         if (logCounter++ % 1000 == 0) {
-            myLog("XRunCount: %d\nduration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n6-0: %f/%f",
+            myLog("XRunCount: %d\nduration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n7-6: %f/%f\n7-0: %f/%f",
                   underrunCount,
                   elapsed[0].count(), renderElapsedMax[0].count(),
                   elapsed[1].count(), renderElapsedMax[1].count(),
@@ -516,7 +552,8 @@ public:
                   elapsed[3].count(), renderElapsedMax[3].count(),
                   elapsed[4].count(), renderElapsedMax[4].count(),
                   elapsed[5].count(), renderElapsedMax[5].count(),
-                  elapsed[6].count(), renderElapsedMax[6].count()
+                  elapsed[6].count(), renderElapsedMax[6].count(),
+                  elapsed[7].count(), renderElapsedMax[7].count()
             );
         }
         return oboe::DataCallbackResult::Continue;
@@ -539,8 +576,73 @@ public:
     }
 
 private:
+    float attenuationFactor;
+    float smoothing;
+    float downSmoothing;
+    float threshold;
+    int downStartSamples;
+    float currentGain = DEFAULT_SPK_GAIN;
+    int downSamples = 0;
+
+    std::atomic<float> vadConf{0};
+    std::atomic<bool> vad{false};
+    std::atomic<bool> muted{false};
+
+    float calcTargetGain() {
+        if (vadConf > threshold) {
+            return std::pow(10.0f, (threshold - vadConf * attenuationFactor) / 20.0f);
+        } else {
+            return DEFAULT_SPK_GAIN;
+        }
+    }
+
+    float slerp(float a, float b, float t) {
+        float result = a + (b - a) * t;
+        if (std::abs(a - result) < 0.0005f) {
+            return a;
+        } else {
+            return result;
+        }
+    }
+
+    void resetGain() {
+        currentGain = DEFAULT_SPK_GAIN;
+        downSamples = 0;
+    }
+
+    template<class T>
+    void applyGain(T &frame, float target) {
+        for (int16_t &s: frame) {
+            bool down = target < currentGain;
+            if (down) {
+                downSamples = downSamples + 1;
+            } else {
+                downSamples = 0;
+            }
+            bool downStart = downSamples >= downStartSamples;
+
+            if (down && downStart) {
+                currentGain = slerp(target, currentGain, downSmoothing);
+            } else if (down) {
+                // explicit raw gain assignment
+                currentGain = (currentGain);
+            } else {
+                currentGain = slerp(target, currentGain, smoothing);
+            }
+
+            float result = static_cast<float>(s) * currentGain;
+            if (result < -32768.0f) {
+                s = static_cast<int16_t>(-32768);
+            } else if (result > 32767.0f) {
+                s = static_cast<int16_t>(32767);
+            } else {
+                s = static_cast<int16_t>(result);
+            }
+        }
+    }
+
     int32_t underrunCountHandled = 0;
-    sc::duration<double, std::milli> renderElapsedMax[7]{};
+    sc::duration<double, std::milli> renderElapsedMax[8]{};
 
     std::shared_ptr<oboe::AudioStream> stream_;
 
@@ -552,8 +654,8 @@ private:
     AudioRenderDataMirrorBufferHw renderMirrorBuffer;
     AtomicQueue<AudioRenderDataHw, 8192> renderQueue;
 
-    AudioRenderDataMirrorBufferHw referenceMirrorBuffer;
-    AtomicQueue<AudioRenderDataHw, 256> referenceQueue;
+    RefDataMirrorBufferHw referenceMirrorBuffer;
+    AtomicQueue<RefDataHw, 256> referenceQueue;
 
     std::atomic<int32_t> traceIdToDrop{INIT_ID};
 };
@@ -562,9 +664,16 @@ private:
 extern "C" JNIEXPORT jlong JNICALL
 Java_tech_fastsense_common_native_1audio_JniWrapper_oboeCreateRenderer(JNIEnv *env, jobject thiz,
                                                                        jint sample_rate,
-                                                                       jint frames_per_buffer) {
+                                                                       jint frames_per_buffer,
+                                                                       jfloat attenuationFactor,
+                                                                       jfloat smoothing,
+                                                                       jfloat downSmoothing,
+                                                                       jfloat threshold,
+                                                                       jint downStartSamples) {
     MY_DBG();
-    auto renderer = new BlockingAudioRenderer(glob->vm, sample_rate, frames_per_buffer);
+    auto renderer = new BlockingAudioRenderer(glob->vm, sample_rate, frames_per_buffer,
+                                              attenuationFactor, smoothing, downSmoothing,
+                                              threshold, downStartSamples);
     if (!renderer->initialize()) {
         delete renderer;
         return 0;
@@ -692,4 +801,25 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_blockingPopCaptureBuffer(JNI
                                                                              jobject thiz,
                                                                              jlong handle) {
     return BlockingRecorder::fromHandle(handle)->blockingPopCaptureBuffer();
+}
+extern "C"
+JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_updateVad(JNIEnv *env, jobject thiz,
+                                                              jlong handle, jboolean vad,
+                                                              jfloat conf) {
+    BlockingAudioRenderer::fromHandle(handle)->updateVad(vad, conf);
+}
+
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_updateMuted(JNIEnv *env, jobject thiz,
+                                                                jlong handle, jboolean muted) {
+    BlockingAudioRenderer::fromHandle(handle)->updateMuted(muted);
+}
+extern "C"
+JNIEXPORT void JNICALL
+Java_tech_fastsense_common_native_1audio_JniWrapper_handleDisconnect(JNIEnv *env, jobject thiz,
+                                                                     jlong handle) {
+    BlockingAudioRenderer::fromHandle(handle)->handleDisconnect();
 }
