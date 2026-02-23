@@ -199,7 +199,7 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *en
     for (int i = 0; i < 7; ++i)
         if (elapsed[i] > captureElapsedMax[i])
             captureElapsedMax[i] = elapsed[i];
-    if (!(captureLogCounter++ % 1000))
+    if (!(captureLogCounter++ % 2000))
         myLog("aecProcessCapture duration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n6-0: %f/%f",
               elapsed[0].count(), captureElapsedMax[0].count(),
               elapsed[1].count(), captureElapsedMax[1].count(),

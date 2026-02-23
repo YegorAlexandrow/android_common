@@ -78,7 +78,7 @@ public:
     }
 
     bool pushRenderBuffer() {
-//        if (!stream_) return; we need to have ability to pre-feed render with eg aec warmup frames
+//        if (!stream_) return; we need to have ability to pre-feed render with file frames
         return renderQueue.push(*renderMirrorBuffer.data);
     }
 
@@ -116,21 +116,21 @@ public:
         auto output = static_cast<decltype(refData.frame) *>(audioData);
         const auto ts1 = schrc::now();
         const auto underrunCount = stream_->getXRunCount().value();
+//        std::this_thread::sleep_for(6ms); // STRESS
         const auto ts2 = schrc::now();
         while (underrunCount - underrunCountHandled > 0) {
             referenceQueue.push(underrunAudioRenderData);
             underrunCountHandled++;
         }
         const auto ts3 = schrc::now();
-
         [[maybe_unused]] const auto res = renderQueue.dropWhilePop(
                 refData, [&](const AudioRenderDataHw &data) {
-                    if (vad) {
+                    if (vad && data.meta.traceId != FILE_ID) {
                         traceIdToDrop = data.meta.traceId;
                         refData.interruptInitiator = INTERRUPT_VAD;
                         refData.traceIdToDrop = traceIdToDrop;
                     }
-                    if (muted) {
+                    if (muted && data.meta.traceId != FILE_ID) {
                         traceIdToDrop = data.meta.traceId;
                         refData.interruptInitiator = INTERRUPT_MUTE;
                         refData.traceIdToDrop = traceIdToDrop;
@@ -154,9 +154,9 @@ public:
             if (elapsed[i] > renderElapsedMax[i])
                 renderElapsedMax[i] = elapsed[i];
 
-        if (logCounter++ % 1000 == 0) {
-            myLog("XRunCount: %d\nduration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n7-6: %f/%f\n7-0: %f/%f",
-                  underrunCount,
+        if (logCounter++ % 2000 == 0) {
+            myLog("underrunCount: %d\nunderrunCountHandled: %d\nduration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n7-6: %f/%f\n7-0: %f/%f",
+                  underrunCount, underrunCountHandled,
                   elapsed[0].count(), renderElapsedMax[0].count(),
                   elapsed[1].count(), renderElapsedMax[1].count(),
                   elapsed[2].count(), renderElapsedMax[2].count(),

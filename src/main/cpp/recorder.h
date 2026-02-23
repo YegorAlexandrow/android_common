@@ -96,7 +96,7 @@ private:
             void *audioData,
             int32_t numFrames) override {
 
-        if (!(logCounter++ % 1000)) {
+        if (!(logCounter++ % 2000)) {
             myLog("MIC: FramesPerBurst: %d, XRunCount: %d, "
                   "BufferCapacityInFrames: %d, BufferSizeInFrames: %d",
                   mStream->getFramesPerBurst(),
