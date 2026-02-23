@@ -6,6 +6,9 @@
 #include "SafeJavaVM.h"
 #include "JavaObject.h"
 
+namespace sc = std::chrono;
+using schrc = sc::high_resolution_clock;
+
 constexpr inline int32_t FILE_ID = INT32_MAX;
 constexpr inline int32_t SILENT_ID = -1;
 constexpr inline int32_t UNDERRUN_ID = -2;
@@ -87,3 +90,45 @@ constexpr inline RefDataHw silentAudioRenderData{
 constexpr inline RefDataHw underrunAudioRenderData{
         {{}, {UNDERRUN_ID, UNDERRUN_ID, UNDERRUN_ID}},
 };
+
+
+std::string vectorToString(const std::vector<int16_t> &vec) {
+    std::stringstream ss;
+    for (size_t i = 0; i < vec.size(); ++i) {
+        ss << vec[i];
+        if (i < vec.size() - 1) {
+            ss << " ";  // Separate each number with a space
+        }
+    }
+    return ss.str();
+}
+
+// Load PCM16 data from a file
+std::vector<int16_t> LoadPCM16File(const std::string &filepath) {
+    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    if (!file) {
+        throw std::runtime_error("Failed to open file: " + filepath);
+    }
+
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<int16_t> buffer(size / sizeof(int16_t));
+    if (!file.read(reinterpret_cast<char *>(buffer.data()), size)) {
+        throw std::runtime_error("Failed to read file: " + filepath);
+    }
+
+    return buffer;
+}
+
+// Save PCM16 data to a file
+void SavePCM16File(const std::string &filepath, const std::vector<int16_t> &data) {
+    std::ofstream file(filepath, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("Failed to open file: " + filepath);
+    }
+
+    if (!file.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(int16_t))) {
+        throw std::runtime_error("Failed to write file: " + filepath);
+    }
+}

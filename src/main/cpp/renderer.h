@@ -1,0 +1,272 @@
+#pragma once
+
+#include "Glob.h"
+#include "GccPhat.h"
+#include "Fft.h"
+#include <string>
+#include <sstream>
+#include <cstdint>
+#include <iostream>
+#include <vector>
+#include <fstream>
+#include "api/audio/echo_canceller3_config.h"
+#include "modules/audio_processing/aec3/echo_canceller3.h"
+#include "AecProcessor.h"
+#include <oboe/Oboe.h>
+#include <android/log.h>
+#include <thread>
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
+#include "utils/temp.h"
+
+class BlockingAudioRenderer : public oboe::AudioStreamCallback {
+public:
+    BlockingAudioRenderer(SafeJavaVM &vm_, int32_t sampleRate, int32_t framesPerBuffer,
+                          jfloat attenuationFactor,
+                          jfloat smoothing, jfloat downSmoothing, jfloat threshold,
+                          jint downStartSamples)
+            : attenuationFactor(attenuationFactor), smoothing(smoothing),
+              downSmoothing(downSmoothing), threshold(threshold),
+              downStartSamples(downStartSamples),
+              sampleRate_(sampleRate), framesPerBuffer_(framesPerBuffer),
+              renderMirrorBuffer(vm_), referenceMirrorBuffer(vm_) {
+        myLog("attenuationFactor: %f\nsmoothing: %f\ndownSmoothing: %f\nthreshold: %f\ndownStartSamples: %d",
+              attenuationFactor, smoothing, downSmoothing, threshold, downStartSamples);
+    }
+
+    ~BlockingAudioRenderer() {
+        stop();
+        closeStream();
+    }
+
+    bool initialize() {
+        oboe::AudioStreamBuilder builder;
+        builder.setAudioApi(AudioApi::AAudio)
+                ->setUsage(oboe::Usage::Game)
+                ->setDirection(oboe::Direction::Output)
+                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+                ->setSharingMode(oboe::SharingMode::Exclusive)
+                ->setFormat(oboe::AudioFormat::I16)
+                ->setChannelCount(1)
+                ->setBufferCapacityInFrames(framesPerBuffer_ * 2)
+                ->setSampleRate(sampleRate_)
+                ->setFramesPerDataCallback(framesPerBuffer_)
+                ->setCallback(this);
+
+        auto result = builder.openStream(stream_);
+        return result == oboe::Result::OK && stream_ != nullptr;
+    }
+
+    void start() {
+        if (stream_) {
+            stream_->requestStart();
+        }
+    }
+
+    void stop() {
+        if (stream_) {
+            stream_->requestStop();
+        }
+    }
+
+    void closeStream() {
+        if (stream_) {
+            stream_->close();
+            stream_.reset();
+        }
+    }
+
+    bool pushRenderBuffer() {
+//        if (!stream_) return; we need to have ability to pre-feed render with eg aec warmup frames
+        return renderQueue.push(*renderMirrorBuffer.data);
+    }
+
+    bool popReferenceBuffer() {
+        return referenceQueue.pop(*referenceMirrorBuffer.data);
+    }
+
+    jobject getRenderBuffer() { return *renderMirrorBuffer.o; }
+
+    jobject getReferenceBuffer() { return *referenceMirrorBuffer.o; }
+
+    void updateVad(bool _vad, float conf) {
+        vad = _vad;
+        vadConf = conf;
+    }
+
+    void updateMuted(bool _muted) {
+        muted = _muted;
+    }
+
+    void handleDisconnect() {
+        traceIdToDrop = INIT_ID;
+    }
+
+    bool isPlaying() const {
+        return stream_ && stream_->getState() == oboe::StreamState::Started;
+    }
+
+    oboe::DataCallbackResult onAudioReady(
+            oboe::AudioStream *audioStream,
+            void *audioData,
+            int32_t numFrames) override {
+        const auto ts0 = schrc::now();
+        auto refData = silentAudioRenderData;
+        auto output = static_cast<decltype(refData.frame) *>(audioData);
+        const auto ts1 = schrc::now();
+        const auto underrunCount = stream_->getXRunCount().value();
+        const auto ts2 = schrc::now();
+        while (underrunCount - underrunCountHandled > 0) {
+            referenceQueue.push(underrunAudioRenderData);
+            underrunCountHandled++;
+        }
+        const auto ts3 = schrc::now();
+
+        [[maybe_unused]] const auto res = renderQueue.dropWhilePop(
+                refData, [&](const AudioRenderDataHw &data) {
+                    if (vad) {
+                        traceIdToDrop = data.meta.traceId;
+                        refData.interruptInitiator = INTERRUPT_VAD;
+                        refData.traceIdToDrop = traceIdToDrop;
+                    }
+                    if (muted) {
+                        traceIdToDrop = data.meta.traceId;
+                        refData.interruptInitiator = INTERRUPT_MUTE;
+                        refData.traceIdToDrop = traceIdToDrop;
+                    }
+                    return data.meta.traceId <= traceIdToDrop;
+                });
+        const auto ts4 = schrc::now();
+        if (refData.meta.traceId != FILE_ID && refData.meta.traceId >= 0) {
+            applyGain(refData.frame, calcTargetGain());
+            refData.spkGain = currentGain;
+        } else resetGain();
+        const auto ts5 = schrc::now();
+        *output = refData.frame;
+        const auto ts6 = schrc::now();
+        referenceQueue.push(refData);
+        const auto ts7 = schrc::now();
+        sc::duration<double, std::milli> elapsed[8]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts4 - ts3,
+                                                    ts5 - ts4, ts6 - ts5, ts7 - ts6, ts7 - ts0};
+
+        for (int i = 0; i < 8; ++i)
+            if (elapsed[i] > renderElapsedMax[i])
+                renderElapsedMax[i] = elapsed[i];
+
+        if (logCounter++ % 1000 == 0) {
+            myLog("XRunCount: %d\nduration/max:\n1-0: %f/%f\n2-1: %f/%f\n3-2: %f/%f\n4-3: %f/%f\n5-4: %f/%f\n6-5: %f/%f\n7-6: %f/%f\n7-0: %f/%f",
+                  underrunCount,
+                  elapsed[0].count(), renderElapsedMax[0].count(),
+                  elapsed[1].count(), renderElapsedMax[1].count(),
+                  elapsed[2].count(), renderElapsedMax[2].count(),
+                  elapsed[3].count(), renderElapsedMax[3].count(),
+                  elapsed[4].count(), renderElapsedMax[4].count(),
+                  elapsed[5].count(), renderElapsedMax[5].count(),
+                  elapsed[6].count(), renderElapsedMax[6].count(),
+                  elapsed[7].count(), renderElapsedMax[7].count()
+            );
+        }
+        return oboe::DataCallbackResult::Continue;
+    }
+
+    void onErrorAfterClose(oboe::AudioStream *stream, oboe::Result error) override {
+        if (error == oboe::Result::ErrorDisconnected) {
+            closeStream();
+            initialize();
+            if (stream_) {
+                stream_->requestStart();
+            }
+        }
+    }
+
+    static BlockingAudioRenderer *fromHandle(jlong handle) {
+        auto renderer = reinterpret_cast<BlockingAudioRenderer *>(handle);
+        if (!renderer) throw std::runtime_error("Cannot get audio renderer from handle");
+        return renderer;
+    }
+
+private:
+    float attenuationFactor;
+    float smoothing;
+    float downSmoothing;
+    float threshold;
+    int downStartSamples;
+    float currentGain = DEFAULT_SPK_GAIN;
+    int downSamples = 0;
+
+    std::atomic<float> vadConf{0};
+    std::atomic<bool> vad{false};
+    std::atomic<bool> muted{false};
+
+    float calcTargetGain() {
+        if (vadConf > threshold) {
+            return std::pow(10.0f, (threshold - vadConf * attenuationFactor) / 20.0f);
+        } else {
+            return DEFAULT_SPK_GAIN;
+        }
+    }
+
+    float slerp(float a, float b, float t) {
+        float result = a + (b - a) * t;
+        if (std::abs(a - result) < 0.0005f) {
+            return a;
+        } else {
+            return result;
+        }
+    }
+
+    void resetGain() {
+        currentGain = DEFAULT_SPK_GAIN;
+        downSamples = 0;
+    }
+
+    template<class T>
+    void applyGain(T &frame, float target) {
+        for (int16_t &s: frame) {
+            bool down = target < currentGain;
+            if (down) {
+                downSamples = downSamples + 1;
+            } else {
+                downSamples = 0;
+            }
+            bool downStart = downSamples >= downStartSamples;
+
+            if (down && downStart) {
+                currentGain = slerp(target, currentGain, downSmoothing);
+            } else if (down) {
+                // explicit raw gain assignment
+                currentGain = (currentGain);
+            } else {
+                currentGain = slerp(target, currentGain, smoothing);
+            }
+
+            float result = static_cast<float>(s) * currentGain;
+            if (result < -32768.0f) {
+                s = static_cast<int16_t>(-32768);
+            } else if (result > 32767.0f) {
+                s = static_cast<int16_t>(32767);
+            } else {
+                s = static_cast<int16_t>(result);
+            }
+        }
+    }
+
+    int32_t underrunCountHandled = 0;
+    sc::duration<double, std::milli> renderElapsedMax[8]{};
+
+    std::shared_ptr<oboe::AudioStream> stream_;
+
+    int32_t sampleRate_;
+    int32_t framesPerBuffer_;
+
+    size_t logCounter = 0;
+
+    AudioRenderDataMirrorBufferHw renderMirrorBuffer;
+    AtomicQueue<AudioRenderDataHw, 8192> renderQueue;
+
+    RefDataMirrorBufferHw referenceMirrorBuffer;
+    AtomicQueue<RefDataHw, 256> referenceQueue;
+
+    std::atomic<int32_t> traceIdToDrop{INIT_ID};
+};

@@ -56,6 +56,17 @@ public:
         return writeCounter - readCounter;
     };
 
+    bool blockingPop(T &val) {
+        writeCounter.wait(readCounter);
+        return pop(val);
+    }
+
+    bool pushNotify(T &item) {
+        auto res = push(item);
+        writeCounter.notify_one();
+        return res;
+    }
+
 private:
 
     bool isEmpty() const { return readCounter == writeCounter; }
