@@ -24,6 +24,7 @@ constexpr inline size_t OUT_FRAME_SAMPLES_HW = OUT_FRAME_SAMPLES_AEC * 8 / 10;
 constexpr inline int32_t INTERRUPT_INIT = 0;
 constexpr inline int32_t INTERRUPT_MUTE = 1;
 constexpr inline int32_t INTERRUPT_VAD = 2;
+constexpr inline int32_t INTERRUPT_GAP = 3;
 
 constexpr inline float DEFAULT_SPK_GAIN = 1.0f;
 

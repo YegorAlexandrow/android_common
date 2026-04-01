@@ -101,6 +101,8 @@ public:
 
     void handleDisconnect() {
         traceIdToDrop = INIT_ID;
+        latestAvatarTraceId = INIT_ID;
+        latestPlayedTraceId = INIT_ID;
     }
 
     bool isPlaying() const {
@@ -135,15 +137,25 @@ public:
                         refData.interruptInitiator = INTERRUPT_MUTE;
                         refData.traceIdToDrop = traceIdToDrop;
                     }
+                    auto gap = latestPlayedTraceId == SILENT_ID &&
+                               data.meta.traceId <= latestAvatarTraceId;
+                    if (gap && data.meta.traceId != FILE_ID) {
+                        traceIdToDrop = data.meta.traceId;
+                        refData.interruptInitiator = INTERRUPT_GAP;
+                        refData.traceIdToDrop = traceIdToDrop;
+                    }
+
                     return data.meta.traceId <= traceIdToDrop;
                 });
         const auto ts4 = schrc::now();
         if (refData.meta.traceId != FILE_ID && refData.meta.traceId >= 0) {
             applyGain(refData.frame, calcTargetGain());
             refData.spkGain = currentGain;
+            latestAvatarTraceId = refData.meta.traceId;
         } else resetGain();
         const auto ts5 = schrc::now();
         *output = refData.frame;
+        latestPlayedTraceId = refData.meta.traceId;
         const auto ts6 = schrc::now();
         referenceQueue.push(refData);
         const auto ts7 = schrc::now();
@@ -269,4 +281,6 @@ private:
     AtomicQueue<RefDataHw, 256> referenceQueue;
 
     std::atomic<int32_t> traceIdToDrop{INIT_ID};
+    std::atomic<int32_t> latestAvatarTraceId{INIT_ID};
+    std::atomic<int32_t> latestPlayedTraceId{INIT_ID};
 };
