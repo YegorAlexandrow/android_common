@@ -188,11 +188,11 @@ Java_tech_fastsense_common_native_1audio_JniWrapper_aecProcessCapture(JNIEnv *en
         }
     }
     auto ts4 = schrc::now();
+    env->ReleasePrimitiveArrayCritical(capture_frame, capture, JNI_ABORT);
+    auto ts5 = schrc::now();
     auto result = env->NewShortArray(OUT_FRAME_SAMPLES_HW);
     env->SetShortArrayRegion(result, 0, OUT_FRAME_SAMPLES_HW,
                              reinterpret_cast<const jshort *>(output.data()));
-    auto ts5 = schrc::now();
-    env->ReleasePrimitiveArrayCritical(capture_frame, capture, JNI_ABORT);
     auto ts6 = schrc::now();
     sc::duration<double, std::milli> elapsed[7]{ts1 - ts0, ts2 - ts1, ts3 - ts2, ts4 - ts3,
                                                 ts5 - ts4, ts6 - ts5, ts6 - ts0};

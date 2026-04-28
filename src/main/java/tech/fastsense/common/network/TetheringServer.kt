@@ -26,10 +26,13 @@ class TetheringServer(private val context: Context) : KoinComponent {
     private var clientsInfoListener: ClientsInfoListener? = null
     private var availabilityListener: AvailabilityListener? = null
 
+    data class Config(
+        val ssid: String,
+        val passphrase: String,
+    )
+
     private var softApListenerEnabled = false
-    private var serverSsid =
-        PreferenceManager.getDefaultSharedPreferences(context).getString("device_id", "wwwwwwww")!!
-    private var serverPass = serverSsid
+    private var config = defaultConfig(context)
 
     private lateinit var backgroundExecutor: ScheduledExecutorService
 
@@ -69,12 +72,30 @@ class TetheringServer(private val context: Context) : KoinComponent {
         enableSoftApListener()
     }
 
+    val ssid: String get() = config.ssid
+    val passphrase: String get() = config.passphrase
+
+    fun configure(
+        ssid: String = config.ssid,
+        passphrase: String = config.passphrase,
+    ) {
+        config = Config(
+            ssid = sanitizeSsid(ssid),
+            passphrase = sanitizePassphrase(passphrase),
+        )
+    }
+
     @SuppressLint("PrivateApi")
-    fun start(onResult: OnTetheringStartResult) {
-        logi("starting tether")
+    fun start(
+        ssid: String = config.ssid,
+        passphrase: String = config.passphrase,
+        onResult: OnTetheringStartResult,
+    ) {
+        configure(ssid, passphrase)
+        logi("starting tether ssid=${config.ssid}")
         val newConfig = SoftApConfigurationBuilder(wifiManager.getSoftApConfiguration())
-            .setPassphrase(serverPass, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
-            .setSsid(serverSsid)
+            .setPassphrase(config.passphrase, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
+            .setSsid(config.ssid)
             .build()
         wifiManager.setSoftApConfiguration(newConfig)
         tetheringManager.startTethering(
@@ -140,5 +161,33 @@ class TetheringServer(private val context: Context) : KoinComponent {
         private const val TAG = "TetheringServer"
         fun loge(s: String) = Log.e(TAG, s)
         fun logi(s: String) = Log.i(TAG, s)
+
+        private fun defaultConfig(context: Context): Config {
+            val deviceId =
+                PreferenceManager.getDefaultSharedPreferences(context)
+                    .getString("device_id", "FrameLan")
+                    ?: "FrameLan"
+            val ssid = normalizeSsid(deviceId)
+            val passphrase = normalizePassphrase(deviceId)
+            return Config(ssid = ssid, passphrase = passphrase)
+        }
+
+        fun normalizeSsid(value: String): String =
+            sanitizeSsid(value)
+
+        fun normalizePassphrase(value: String): String =
+            sanitizePassphrase(value)
+
+        private fun sanitizeSsid(value: String): String =
+            value.trim().ifEmpty { "FrameLan" }.take(32)
+
+        private fun sanitizePassphrase(value: String): String {
+            val trimmed = value.trim()
+            return when {
+                trimmed.length >= 8 -> trimmed.take(63)
+                trimmed.isEmpty() -> "FrameLan123"
+                else -> (trimmed + "12345678").take(8)
+            }
+        }
     }
 }
