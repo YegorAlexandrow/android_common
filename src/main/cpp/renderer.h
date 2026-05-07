@@ -41,21 +41,52 @@ public:
     }
 
     bool initialize() {
-        oboe::AudioStreamBuilder builder;
-        builder.setAudioApi(AudioApi::AAudio)
-                ->setUsage(oboe::Usage::Game)
-                ->setDirection(oboe::Direction::Output)
-                ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-                ->setSharingMode(oboe::SharingMode::Exclusive)
-                ->setFormat(oboe::AudioFormat::I16)
-                ->setChannelCount(1)
-                ->setBufferCapacityInFrames(framesPerBuffer_ * 2)
-                ->setSampleRate(sampleRate_)
-                ->setFramesPerDataCallback(framesPerBuffer_)
-                ->setCallback(this);
+        // Output stream creation is fragile across devices (exclusive/mono/low-latency may fail).
+        // Try a few fallbacks and log errors so Android-side can understand why the renderer handle is 0.
+        struct Attempt {
+            const char *label;
+            oboe::SharingMode sharing;
+            oboe::PerformanceMode perf;
+            int channels;
+        };
 
-        auto result = builder.openStream(stream_);
-        return result == oboe::Result::OK && stream_ != nullptr;
+        const Attempt attempts[] = {
+                {"AAudio exclusive LL mono", oboe::SharingMode::Exclusive, oboe::PerformanceMode::LowLatency, 1},
+                {"AAudio exclusive LL stereo", oboe::SharingMode::Exclusive, oboe::PerformanceMode::LowLatency, 2},
+                {"AAudio shared LL mono", oboe::SharingMode::Shared, oboe::PerformanceMode::LowLatency, 1},
+                {"AAudio shared LL stereo", oboe::SharingMode::Shared, oboe::PerformanceMode::LowLatency, 2},
+                {"AAudio shared none mono", oboe::SharingMode::Shared, oboe::PerformanceMode::None, 1},
+                {"AAudio shared none stereo", oboe::SharingMode::Shared, oboe::PerformanceMode::None, 2},
+        };
+
+        for (const auto &a: attempts) {
+            oboe::AudioStreamBuilder builder;
+            builder.setAudioApi(AudioApi::AAudio)
+                    ->setUsage(oboe::Usage::Game)
+                    ->setDirection(oboe::Direction::Output)
+                    ->setPerformanceMode(a.perf)
+                    ->setSharingMode(a.sharing)
+                    ->setFormat(oboe::AudioFormat::I16)
+                    ->setChannelCount(a.channels)
+                    ->setBufferCapacityInFrames(framesPerBuffer_ * 2)
+                    ->setSampleRate(sampleRate_)
+                    ->setFramesPerDataCallback(framesPerBuffer_)
+                    ->setCallback(this);
+
+            auto result = builder.openStream(stream_);
+            if (result == oboe::Result::OK && stream_ != nullptr) {
+                myLog("Renderer stream opened (%s): api=%s ch=%d sr=%d fpb=%d",
+                      a.label,
+                      oboe::convertToText(stream_->getAudioApi()),
+                      stream_->getChannelCount(),
+                      stream_->getSampleRate(),
+                      stream_->getFramesPerBurst());
+                return true;
+            }
+            myLog<Prio::E>("Renderer openStream failed (%s): %s", a.label, oboe::convertToText(result));
+            stream_.reset();
+        }
+        return false;
     }
 
     void start() {
@@ -115,7 +146,7 @@ public:
             int32_t numFrames) override {
         const auto ts0 = schrc::now();
         auto refData = silentAudioRenderData;
-        auto output = static_cast<decltype(refData.frame) *>(audioData);
+        auto output = static_cast<int16_t *>(audioData);
         const auto ts1 = schrc::now();
         const auto underrunCount = stream_->getXRunCount().value();
 //        std::this_thread::sleep_for(6ms); // STRESS
@@ -154,7 +185,18 @@ public:
             latestAvatarTraceId = refData.meta.traceId;
         } else resetGain();
         const auto ts5 = schrc::now();
-        *output = refData.frame;
+        const int ch = audioStream ? audioStream->getChannelCount() : 1;
+        if (ch <= 1) {
+            // mono
+            std::memcpy(output, refData.frame.data(), sizeof(int16_t) * refData.frame.size());
+        } else {
+            // stereo: duplicate mono frame into L/R
+            for (size_t i = 0; i < refData.frame.size(); i++) {
+                const auto s = refData.frame[i];
+                output[i * 2] = s;
+                output[i * 2 + 1] = s;
+            }
+        }
         latestPlayedTraceId = refData.meta.traceId;
         const auto ts6 = schrc::now();
         referenceQueue.push(refData);
