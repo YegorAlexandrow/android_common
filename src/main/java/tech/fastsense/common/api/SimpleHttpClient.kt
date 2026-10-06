@@ -3,9 +3,11 @@ package tech.fastsense.common.api
 import android.content.Context
 import com.android.volley.AuthFailureError
 import com.android.volley.DefaultRetryPolicy
+import com.android.volley.NetworkResponse
 import com.android.volley.Request
 import com.android.volley.RequestQueue
 import com.android.volley.Response
+import com.android.volley.toolbox.HttpHeaderParser
 import com.android.volley.toolbox.JsonObjectRequest
 import com.android.volley.toolbox.StringRequest
 import com.android.volley.toolbox.Volley
@@ -74,6 +76,28 @@ class SimpleHttpClient(context: Context, private val apiUrl: String = DEFAULT_AP
         callback: (String) -> Unit
     ) {
         stringRequest(Request.Method.GET, route, callback, errorCallback)
+    }
+
+    /** GET, отдающий вместе с телом заголовки ответа (имена в нижнем регистре). */
+    fun getJsonWithHeaders(
+        route: String,
+        errorCallback: (Exception) -> Unit = {},
+        callback: (String, Map<String, String>) -> Unit
+    ) {
+        getIdToken(errorCallback = errorCallback) {
+            run {
+                val r = AuthorizedHeadersRequest(
+                    "$apiUrl$route",
+                    it,
+                    { (body, headers) -> callback(body, headers) },
+                    { errorCallback(it) }
+                ).apply {
+                    retryPolicy = DefaultRetryPolicy(5000, 2, 1.5f)
+                }
+
+                requestQueue.add(r)
+            }
+        }
     }
 
     fun getString(route: String, callback: (String) -> Unit) {
@@ -149,6 +173,36 @@ class SimpleHttpClient(context: Context, private val apiUrl: String = DEFAULT_AP
         }
     }
 
+    private class AuthorizedHeadersRequest(
+        path: String,
+        private val token: String,
+        private val listener: Response.Listener<Pair<String, Map<String, String>>>,
+        errorListener: Response.ErrorListener?,
+    ) : Request<Pair<String, Map<String, String>>>(Method.GET, path, errorListener) {
+        @Throws(AuthFailureError::class)
+        override fun getHeaders(): Map<String, String> {
+            return mapOf(
+                "Authorization" to "Bearer $token"
+            )
+        }
+
+        override fun parseNetworkResponse(
+            response: NetworkResponse
+        ): Response<Pair<String, Map<String, String>>> {
+            val body = String(
+                response.data,
+                charset(HttpHeaderParser.parseCharset(response.headers, "UTF-8"))
+            )
+            val headers = response.headers.orEmpty().mapKeys { it.key.lowercase() }
+            return Response.success(
+                body to headers,
+                HttpHeaderParser.parseCacheHeaders(response)
+            )
+        }
+
+        override fun deliverResponse(response: Pair<String, Map<String, String>>) =
+            listener.onResponse(response)
+    }
 
     companion object {
         //        private const val DEFAULT_API_URL: String = "https://api.wehead.dev/api/v0"  // PROD

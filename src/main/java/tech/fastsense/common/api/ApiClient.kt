@@ -3,6 +3,7 @@ package tech.fastsense.common.api
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import android.util.Log
 import androidx.preference.PreferenceManager
 import com.android.volley.Request
@@ -163,6 +164,26 @@ class ApiClient(private val context: Context) {
         }
     }
 
+    /** Одна страница релизов; [callback] получает релизы и токен следующей страницы (null — страниц больше нет). */
+    fun getReleasesPage(
+        releaseType: ReleaseType?,
+        isFrameApp: Boolean = false,
+        pageToken: String? = null,
+        errorCallback: (Exception) -> Unit = {},
+        callback: (List<Release>, String?) -> Unit
+    ) {
+        val projectParam = if (isFrameApp) "project=frame&" else ""
+        val pageParam = pageToken?.let { "&page_token=${Uri.encode(it)}" } ?: ""
+        httpClient.getJsonWithHeaders(
+            "/releases/?${projectParam}release_type=${releaseType?.toString() ?: ""}$pageParam",
+            errorCallback
+        ) { body, headers ->
+            val listType: Type = object : TypeToken<List<Release>>() {}.type
+            val releases: List<Release> = gson.fromJson(body, listType)
+            callback(releases, headers[NEXT_PAGE_TOKEN_HEADER]?.takeIf { it.isNotEmpty() })
+        }
+    }
+
     /* VIDEO MESSAGES */
 
     fun getVideoMessageById(id: UUID, callback: (VideoMessage) -> Unit) {
@@ -299,6 +320,7 @@ class ApiClient(private val context: Context) {
     }
 
     companion object {
+        private const val NEXT_PAGE_TOKEN_HEADER = "x-next-page-token"
 
         fun logJson(tag: String, json: String) = try {
             val jsonObject = JSONObject(json)
