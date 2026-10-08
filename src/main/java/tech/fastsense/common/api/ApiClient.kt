@@ -184,6 +184,22 @@ class ApiClient(private val context: Context) {
         }
     }
 
+    /**
+     * Ссылка на файл релиза из заданного хранилища ("us" — GCS, "cn" — COS). Нужна,
+     * когда ссылка «своего» региона не качается: китайское устройство за VPN получает
+     * GCS, а Google из Китая недоступен, и наоборот.
+     */
+    fun getReleaseLinkIn(
+        releaseId: String,
+        region: String,
+        errorCallback: (Exception) -> Unit = {},
+        callback: (String) -> Unit
+    ) {
+        httpClient.getJson("/releases/${Uri.encode(releaseId)}/link?region=${Uri.encode(region)}", errorCallback) {
+            callback(it.trim().removeSurrounding("\""))
+        }
+    }
+
     /* VIDEO MESSAGES */
 
     fun getVideoMessageById(id: UUID, callback: (VideoMessage) -> Unit) {
